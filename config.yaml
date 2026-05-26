@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+mysql:
+  dsn: "root:20050925@tcp(127.0.0.1:3306)/our_agent?charset=utf8mb4&parseTime=True&loc=Local"
+
+qdrant:
+  url: "http://localhost:6333"
+  collection: "our_agent_chunks"
+
+llm:
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key: "${OPENAI_API_KEY}"
+  chat_model: "qwen3.6-plus"
+  embedding_model: "text-embedding-v4"
+
+rag:
+  chunk_size: 1000
+  chunk_overlap: 200
+  top_k: 5
+
+jwt:
+  secret: "${JWT_SECRET}"
+  expires_hours: 168
+
+storage:
+  document_dir: "storage/documents"

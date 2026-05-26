@@ -587,3 +587,23 @@ MVP 暂不做：
 - 项目方向是企业知识库 RAG Agent，不做泛聊天机器人。
 - 第一阶段先完成 RAG 闭环，Agent 能力放在进阶阶段。
 - README 只维护当前确定的项目需求，不记录临时讨论过程。
+
+## 12. 本地开发
+
+v0.1 本地开发约定：
+
+- MySQL 使用本机已有服务。
+- Qdrant 使用 Docker Compose 启动。
+- 配置通过 Viper 读取 `config.yaml` 和 `.env`。
+
+启动 Qdrant：
+
+```bash
+docker compose up -d
+```
+
+启动后端：
+
+```bash
+go run ./cmd/server
+```

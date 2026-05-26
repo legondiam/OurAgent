@@ -1,1 +1,8 @@
-*.idea
+.idea/
+.env
+storage/
+tmp/
+logs/
+.gocache/
+*.exe
+.vscode/
