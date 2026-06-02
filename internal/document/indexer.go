@@ -7,21 +7,21 @@ import (
 	"time"
 
 	"OurAgent/internal/config"
-	"OurAgent/internal/llm"
 	"OurAgent/internal/model"
 	"OurAgent/internal/vectorstore"
 
+	"github.com/cloudwego/eino/components/embedding"
 	"gorm.io/gorm"
 )
 
 type Indexer struct {
 	db       *gorm.DB
 	qdrant   *vectorstore.QdrantClient
-	embedder llm.EmbeddingProvider
+	embedder embedding.Embedder
 	cfg      *config.Config
 }
 
-func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, embedder llm.EmbeddingProvider, cfg *config.Config) *Indexer {
+func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, embedder embedding.Embedder, cfg *config.Config) *Indexer {
 	return &Indexer{db: db, qdrant: qdrant, embedder: embedder, cfg: cfg}
 }
 
@@ -70,7 +70,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 
 	chunkCount := 0
 	for idx, content := range chunks {
-		vectors, err := i.embedder.Embed(ctx, []string{content})
+		vectors, err := i.embedder.EmbedStrings(ctx, []string{content})
 		if err != nil {
 			i.fail(doc.ID, fmt.Sprintf("生成 embedding 失败: %v", err))
 			return err

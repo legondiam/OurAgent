@@ -9,7 +9,6 @@ import (
 	"OurAgent/internal/document"
 	"OurAgent/internal/einoapp"
 	"OurAgent/internal/handler"
-	"OurAgent/internal/llm"
 	"OurAgent/internal/rag"
 	"OurAgent/internal/repository"
 	"OurAgent/internal/router"
@@ -38,7 +37,10 @@ func main() {
 	}
 
 	qdrant := vectorstore.NewQdrantClient(cfg.Qdrant.URL, cfg.Qdrant.Collection)
-	embedder := llm.NewOpenAICompatibleEmbedding(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
+	embedder, err := einoapp.NewEmbedding(context.Background(), cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
+	if err != nil {
+		logger.Logger.Fatal("初始化 Eino Embedding 失败", zap.Error(err))
+	}
 	chatModel, err := einoapp.NewChatModel(context.Background(), cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.ChatModel)
 	if err != nil {
 		logger.Logger.Fatal("初始化 Eino ChatModel 失败", zap.Error(err))

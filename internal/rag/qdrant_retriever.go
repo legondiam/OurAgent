@@ -4,11 +4,11 @@ import (
 	"context"
 	"sort"
 
-	"OurAgent/internal/llm"
 	"OurAgent/internal/model"
 	"OurAgent/internal/repository"
 	"OurAgent/internal/vectorstore"
 
+	"github.com/cloudwego/eino/components/embedding"
 	pkgerrors "github.com/pkg/errors"
 )
 
@@ -16,17 +16,17 @@ type QdrantRetriever struct {
 	docs     *repository.DocumentRepository
 	chunks   *repository.ChunkRepository
 	qdrant   *vectorstore.QdrantClient
-	embedder llm.EmbeddingProvider
+	embedder embedding.Embedder
 }
 
-func NewQdrantRetriever(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, qdrant *vectorstore.QdrantClient, embedder llm.EmbeddingProvider) *QdrantRetriever {
+func NewQdrantRetriever(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, qdrant *vectorstore.QdrantClient, embedder embedding.Embedder) *QdrantRetriever {
 	return &QdrantRetriever{docs: docs, chunks: chunks, qdrant: qdrant, embedder: embedder}
 }
 
 // Retrieve 检索知识库相关文档切片
 func (r *QdrantRetriever) Retrieve(ctx context.Context, req RetrieveRequest) ([]RetrievedChunk, error) {
 	// 将用户问题转成向量
-	vectors, err := r.embedder.Embed(ctx, []string{req.Query})
+	vectors, err := r.embedder.EmbedStrings(ctx, []string{req.Query})
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "问题向量化失败")
 	}
