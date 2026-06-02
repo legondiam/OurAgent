@@ -6,3 +6,6 @@ logs/
 .gocache/
 *.exe
 .vscode/
+*.md
+!README.md
+*.tex

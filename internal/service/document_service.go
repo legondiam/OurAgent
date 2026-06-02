@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	stderrors "errors"
 	"fmt"
 	"mime/multipart"
 	"os"
@@ -12,14 +14,17 @@ import (
 	"OurAgent/internal/document"
 	"OurAgent/internal/model"
 	"OurAgent/internal/repository"
+	"OurAgent/internal/vectorstore"
 
 	pkgerrors "github.com/pkg/errors"
 )
 
 type DocumentService struct {
 	docs    *repository.DocumentRepository
+	chunks  *repository.ChunkRepository
 	kbs     *repository.KnowledgeBaseRepository
 	indexer *document.Indexer
+	qdrant  *vectorstore.QdrantClient
 	cfg     *config.Config
 }
 
@@ -30,8 +35,8 @@ type UploadDocumentInput struct {
 	Save   func(file *multipart.FileHeader, dst string) error
 }
 
-func NewDocumentService(docs *repository.DocumentRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, cfg *config.Config) *DocumentService {
-	return &DocumentService{docs: docs, kbs: kbs, indexer: indexer, cfg: cfg}
+func NewDocumentService(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, qdrant *vectorstore.QdrantClient, cfg *config.Config) *DocumentService {
+	return &DocumentService{docs: docs, chunks: chunks, kbs: kbs, indexer: indexer, qdrant: qdrant, cfg: cfg}
 }
 
 // Upload 保存上传文档并触发异步索引
@@ -101,5 +106,48 @@ func (s *DocumentService) Get(userID, docID uint64) (*model.Document, error) {
 	if err != nil {
 		return nil, pkgerrors.WithStack(ErrDocumentNotFound)
 	}
+	return doc, nil
+}
+
+// Delete 删除文档和对应索引数据
+func (s *DocumentService) Delete(ctx context.Context, userID, docID uint64) error {
+	doc, err := s.docs.FindByIDAndUserID(docID, userID)
+	if err != nil {
+		return pkgerrors.WithStack(ErrDocumentNotFound)
+	}
+	if doc.Status == "processing" {
+		return pkgerrors.WithStack(ErrDocumentIndexing)
+	}
+	if err := s.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
+		return pkgerrors.WithMessage(err, "删除向量索引失败")
+	}
+	if err := s.chunks.DeleteByDocumentID(userID, docID); err != nil {
+		return pkgerrors.WithMessage(err, "删除文档切片失败")
+	}
+	if err := s.docs.DeleteByIDAndUserID(docID, userID); err != nil {
+		return pkgerrors.WithMessage(err, "删除文档记录失败")
+	}
+	if err := os.Remove(doc.FilePath); err != nil && !stderrors.Is(err, os.ErrNotExist) {
+		return pkgerrors.WithMessage(err, "删除本地文件失败")
+	}
+	return nil
+}
+
+// Reindex 重新触发文档索引
+func (s *DocumentService) Reindex(userID, docID uint64) (*model.Document, error) {
+	doc, err := s.docs.FindByIDAndUserID(docID, userID)
+	if err != nil {
+		return nil, pkgerrors.WithStack(ErrDocumentNotFound)
+	}
+	if doc.Status == "processing" {
+		return nil, pkgerrors.WithStack(ErrDocumentIndexing)
+	}
+	if err := s.docs.UpdateStatus(doc.ID, userID, "pending", "", 0); err != nil {
+		return nil, pkgerrors.WithMessage(err, "更新文档状态失败")
+	}
+	doc.Status = "pending"
+	doc.ErrorMessage = ""
+	doc.ChunkCount = 0
+	s.indexer.IndexAsync(doc.ID)
 	return doc, nil
 }

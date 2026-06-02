@@ -18,6 +18,9 @@ rag:
   chunk_size: 1000
   chunk_overlap: 200
   top_k: 5
+  score_threshold: 0.3
+  max_context_tokens: 6000
+  strict_mode: true
 
 jwt:
   secret: "${JWT_SECRET}"

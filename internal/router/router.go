@@ -41,6 +41,10 @@ func registerProtectedRoutes(api *gin.RouterGroup, deps Dependencies) {
 	protected.POST("/knowledge-bases/:id/documents", deps.DocumentHandler.Upload)
 	protected.GET("/knowledge-bases/:id/documents", deps.DocumentHandler.List)
 	protected.GET("/documents/:id", deps.DocumentHandler.Get)
+	protected.DELETE("/documents/:id", deps.DocumentHandler.Delete)
+	protected.POST("/documents/:id/reindex", deps.DocumentHandler.Reindex)
 	protected.POST("/knowledge-bases/:id/chat", deps.ChatHandler.Chat)
+	protected.POST("/knowledge-bases/:id/chat/stream", deps.ChatHandler.Stream)
 	protected.GET("/chat-logs", deps.ChatHandler.ListLogs)
+	protected.POST("/chat-logs/:id/feedback", deps.ChatHandler.Feedback)
 }

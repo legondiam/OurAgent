@@ -45,6 +45,11 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 
+	if err := i.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
+		i.fail(doc.ID, fmt.Sprintf("删除旧向量失败: %v", err))
+		return err
+	}
+
 	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentChunk{}).Error; err != nil {
 		i.fail(doc.ID, fmt.Sprintf("删除旧 chunk 失败: %v", err))
 		return err
@@ -124,6 +129,8 @@ func (i *Indexer) updateStatus(documentID uint64, status, message string, chunkC
 	}
 	if chunkCount > 0 {
 		updates["chunk_count"] = chunkCount
+	} else if status == "processing" || status == "failed" {
+		updates["chunk_count"] = 0
 	}
 	return i.db.Model(&model.Document{}).Where("id = ?", documentID).Updates(updates).Error
 }

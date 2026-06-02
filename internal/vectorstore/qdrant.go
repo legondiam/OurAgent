@@ -73,6 +73,26 @@ func (c *QdrantClient) Upsert(ctx context.Context, pointID uint64, vector []floa
 	return c.do(ctx, http.MethodPut, "/collections/"+c.collection+"/points?wait=true", body, nil)
 }
 
+// DeleteByDocument 删除指定文档关联的向量点
+func (c *QdrantClient) DeleteByDocument(ctx context.Context, userID, knowledgeBaseID, documentID uint64) error {
+	body := map[string]interface{}{
+		"filter": map[string]interface{}{
+			"must": []map[string]interface{}{
+				{"key": "user_id", "match": map[string]interface{}{"value": userID}},
+				{"key": "knowledge_base_id", "match": map[string]interface{}{"value": knowledgeBaseID}},
+				{"key": "document_id", "match": map[string]interface{}{"value": documentID}},
+			},
+		},
+	}
+	if err := c.do(ctx, http.MethodPost, "/collections/"+c.collection+"/points/delete?wait=true", body, nil); err != nil {
+		if strings.Contains(err.Error(), "状态码=404") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // Search 按用户和知识库过滤检索相似向量
 func (c *QdrantClient) Search(ctx context.Context, vector []float64, userID, knowledgeBaseID uint64, limit int) ([]SearchHit, error) {
 	body := map[string]interface{}{

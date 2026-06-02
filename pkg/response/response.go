@@ -16,6 +16,9 @@ const (
 	CodeMissingFile           = 3003
 	CodeUnsupportedFileType   = 3004
 	CodeQuestionEmpty         = 3005
+	CodeChatLogNotFound       = 3006
+	CodeInvalidFeedback       = 3007
+	CodeDocumentIndexing      = 3008
 
 	CodeInternal = 5000
 )

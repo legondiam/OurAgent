@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"strconv"
+	"time"
 
 	"OurAgent/internal/service"
 	"OurAgent/pkg/response"
@@ -84,4 +86,43 @@ func (h *DocumentHandler) Get(c *gin.Context) {
 		return
 	}
 	response.Success(c, doc)
+}
+
+// Delete 处理删除文档请求
+func (h *DocumentHandler) Delete(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	docID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BusinessError(c, response.CodeInvalidParam, "文档 id 错误")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	if err := h.service.Delete(ctx, userID, docID); err != nil {
+		handleDocumentError(c, err, "删除文档失败")
+		return
+	}
+	response.Success(c, nil)
+}
+
+// Reindex 处理重新索引文档请求
+func (h *DocumentHandler) Reindex(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	docID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BusinessError(c, response.CodeInvalidParam, "文档 id 错误")
+		return
+	}
+	doc, err := h.service.Reindex(userID, docID)
+	if err != nil {
+		handleDocumentError(c, err, "重建索引失败")
+		return
+	}
+	response.Success(c, gin.H{"document_id": doc.ID, "status": doc.Status})
 }

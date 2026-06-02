@@ -40,9 +40,12 @@ type LLMConfig struct {
 }
 
 type RAGConfig struct {
-	ChunkSize    int `yaml:"chunk_size" mapstructure:"chunk_size"`
-	ChunkOverlap int `yaml:"chunk_overlap" mapstructure:"chunk_overlap"`
-	TopK         int `yaml:"top_k" mapstructure:"top_k"`
+	ChunkSize        int     `yaml:"chunk_size" mapstructure:"chunk_size"`
+	ChunkOverlap     int     `yaml:"chunk_overlap" mapstructure:"chunk_overlap"`
+	TopK             int     `yaml:"top_k" mapstructure:"top_k"`
+	ScoreThreshold   float64 `yaml:"score_threshold" mapstructure:"score_threshold"`
+	MaxContextTokens int     `yaml:"max_context_tokens" mapstructure:"max_context_tokens"`
+	StrictMode       bool    `yaml:"strict_mode" mapstructure:"strict_mode"`
 }
 
 type JWTConfig struct {
@@ -87,6 +90,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.chunk_size", 1000)
 	v.SetDefault("rag.chunk_overlap", 200)
 	v.SetDefault("rag.top_k", 5)
+	v.SetDefault("rag.score_threshold", 0.3)
+	v.SetDefault("rag.max_context_tokens", 6000)
+	v.SetDefault("rag.strict_mode", true)
 	v.SetDefault("jwt.expires_hours", 168)
 	v.SetDefault("storage.document_dir", "storage/documents")
 }
@@ -114,6 +120,12 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.RAG.TopK == 0 {
 		cfg.RAG.TopK = 5
+	}
+	if cfg.RAG.ScoreThreshold < 0 {
+		cfg.RAG.ScoreThreshold = 0
+	}
+	if cfg.RAG.MaxContextTokens == 0 {
+		cfg.RAG.MaxContextTokens = 6000
 	}
 	if cfg.JWT.ExpiresHours == 0 {
 		cfg.JWT.ExpiresHours = 168

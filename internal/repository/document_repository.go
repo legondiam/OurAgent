@@ -63,3 +63,28 @@ func (r *DocumentRepository) FindByIDsAndUserID(ids []uint64, userID uint64) ([]
 	}
 	return docs, nil
 }
+
+// DeleteByIDAndUserID 删除用户文档记录
+func (r *DocumentRepository) DeleteByIDAndUserID(id, userID uint64) error {
+	result := r.db.Where("id = ? AND user_id = ?", id, userID).Delete(&model.Document{})
+	if result.Error != nil {
+		return pkgerrors.WithMessage(result.Error, "删除文档失败")
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// UpdateStatus 更新文档索引状态
+func (r *DocumentRepository) UpdateStatus(id, userID uint64, status, message string, chunkCount int) error {
+	updates := map[string]interface{}{
+		"status":        status,
+		"error_message": message,
+		"chunk_count":   chunkCount,
+	}
+	if err := r.db.Model(&model.Document{}).Where("id = ? AND user_id = ?", id, userID).Updates(updates).Error; err != nil {
+		return pkgerrors.WithMessage(err, "更新文档状态失败")
+	}
+	return nil
+}

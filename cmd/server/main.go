@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"OurAgent/internal/config"
 	"OurAgent/internal/database"
 	"OurAgent/internal/document"
+	"OurAgent/internal/einoapp"
 	"OurAgent/internal/handler"
 	"OurAgent/internal/llm"
 	"OurAgent/internal/rag"
@@ -37,19 +39,26 @@ func main() {
 
 	qdrant := vectorstore.NewQdrantClient(cfg.Qdrant.URL, cfg.Qdrant.Collection)
 	embedder := llm.NewOpenAICompatibleEmbedding(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
-	chatModel := llm.NewOpenAICompatibleChat(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.ChatModel)
+	chatModel, err := einoapp.NewChatModel(context.Background(), cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.ChatModel)
+	if err != nil {
+		logger.Logger.Fatal("初始化 Eino ChatModel 失败", zap.Error(err))
+	}
 
 	userRepo := repository.NewUserRepository(db)
 	kbRepo := repository.NewKnowledgeBaseRepository(db)
 	documentRepo := repository.NewDocumentRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
 	chatLogRepo := repository.NewChatLogRepository(db)
+	ragRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
 
 	indexer := document.NewIndexer(db, qdrant, embedder, cfg)
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
-	documentService := service.NewDocumentService(documentRepo, kbRepo, indexer, cfg)
-	chatService := rag.NewService(kbRepo, documentRepo, chunkRepo, chatLogRepo, qdrant, embedder, chatModel, cfg)
+	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, cfg)
+	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, chatModel, cfg)
+	if err != nil {
+		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
+	}
 
 	authHandler := handler.NewAuthHandler(authService)
 	kbHandler := handler.NewKnowledgeBaseHandler(kbService)

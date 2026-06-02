@@ -57,9 +57,25 @@ type ChatLog struct {
 	Question         string         `gorm:"type:text;not null" json:"question"`
 	Answer           string         `gorm:"type:longtext;not null" json:"answer"`
 	RetrievedChunks  datatypes.JSON `gorm:"type:json" json:"retrieved_chunks"`
+	RetrievalTrace   datatypes.JSON `gorm:"type:json" json:"retrieval_trace"`
+	PromptPreview    string         `gorm:"type:text" json:"prompt_preview"`
 	ModelName        string         `gorm:"size:100" json:"model_name"`
 	PromptTokens     int            `json:"prompt_tokens"`
 	CompletionTokens int            `json:"completion_tokens"`
+	ScoreThreshold   float64        `json:"score_threshold"`
+	TopK             int            `json:"top_k"`
+	MaxContextTokens int            `json:"max_context_tokens"`
+	StrictMode       bool           `json:"strict_mode"`
 	LatencyMS        int64          `json:"latency_ms"`
 	CreatedAt        time.Time      `json:"created_at"`
+}
+
+type ChatFeedback struct {
+	ID        uint64    `gorm:"primaryKey" json:"id"`
+	ChatLogID uint64    `gorm:"uniqueIndex:idx_chat_feedback_user_log;not null" json:"chat_log_id"`
+	UserID    uint64    `gorm:"uniqueIndex:idx_chat_feedback_user_log;not null" json:"user_id"`
+	Rating    string    `gorm:"size:32;not null" json:"rating"`
+	Reason    string    `gorm:"type:text" json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }

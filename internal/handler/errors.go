@@ -49,6 +49,9 @@ func handleDocumentError(c *gin.Context, err error, fallback string) {
 	case stderrors.Is(err, service.ErrUnsupportedFileType):
 		response.BusinessError(c, response.CodeUnsupportedFileType, "文件类型不支持")
 		logger.S.Infof("文件类型不支持：%+v", err)
+	case stderrors.Is(err, service.ErrDocumentIndexing):
+		response.BusinessError(c, response.CodeDocumentIndexing, "文档正在索引中，请稍后再试")
+		logger.S.Infof("文档正在索引中：%+v", err)
 	default:
 		response.ServerError(c, fallback)
 		logger.S.Errorf("服务器错误：%+v", err)
@@ -63,6 +66,12 @@ func handleChatError(c *gin.Context, err error, fallback string) {
 	case stderrors.Is(err, service.ErrKnowledgeBaseNotFound):
 		response.BusinessError(c, response.CodeKnowledgeBaseNotFound, "知识库不存在")
 		logger.S.Infof("知识库不存在：%+v", err)
+	case stderrors.Is(err, service.ErrChatLogNotFound):
+		response.BusinessError(c, response.CodeChatLogNotFound, "问答日志不存在")
+		logger.S.Infof("问答日志不存在：%+v", err)
+	case stderrors.Is(err, service.ErrInvalidFeedback):
+		response.BusinessError(c, response.CodeInvalidFeedback, "反馈参数错误")
+		logger.S.Infof("反馈参数错误：%+v", err)
 	default:
 		response.ServerError(c, fallback)
 		logger.S.Errorf("服务器错误：%+v", err)

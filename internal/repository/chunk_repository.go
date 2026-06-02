@@ -26,3 +26,20 @@ func (r *ChunkRepository) FindByIDs(userID, kbID uint64, ids []uint64) ([]model.
 	}
 	return chunks, nil
 }
+
+// FindByDocumentID 查询文档下的全部切片
+func (r *ChunkRepository) FindByDocumentID(userID, documentID uint64) ([]model.DocumentChunk, error) {
+	var chunks []model.DocumentChunk
+	if err := r.db.Where("document_id = ? AND user_id = ?", documentID, userID).Find(&chunks).Error; err != nil {
+		return nil, pkgerrors.WithMessage(err, "查询文档切片失败")
+	}
+	return chunks, nil
+}
+
+// DeleteByDocumentID 删除文档下的全部切片
+func (r *ChunkRepository) DeleteByDocumentID(userID, documentID uint64) error {
+	if err := r.db.Where("document_id = ? AND user_id = ?", documentID, userID).Delete(&model.DocumentChunk{}).Error; err != nil {
+		return pkgerrors.WithMessage(err, "删除文档切片失败")
+	}
+	return nil
+}

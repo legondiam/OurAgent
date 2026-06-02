@@ -20,5 +20,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Document{},
 		&model.DocumentChunk{},
 		&model.ChatLog{},
+		&model.ChatFeedback{},
 	)
 }
