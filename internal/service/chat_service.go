@@ -35,6 +35,7 @@ type ChatRequest struct {
 	ScoreThreshold   *float64
 	MaxContextTokens int
 	StrictMode       *bool
+	QueryRewrite     *bool
 }
 
 type ChatResponse struct {
@@ -58,8 +59,8 @@ type FeedbackInput struct {
 	Reason    string
 }
 
-func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository, docs *repository.DocumentRepository, logs *repository.ChatLogRepository, retriever rag.Retriever, chat einomodel.BaseChatModel, cfg *config.Config) (*ChatService, error) {
-	ragChain, err := rag.NewRAGChain(ctx, retriever, chat, cfg.LLM.ChatModel)
+func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository, docs *repository.DocumentRepository, logs *repository.ChatLogRepository, retriever rag.Retriever, rewriter rag.QueryRewriter, chat einomodel.BaseChatModel, cfg *config.Config) (*ChatService, error) {
+	ragChain, err := rag.NewRAGChain(ctx, retriever, rewriter, chat, cfg.LLM.ChatModel)
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "初始化 Eino RAG Chain 失败")
 	}
@@ -259,15 +260,29 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	if req.StrictMode != nil {
 		strictMode = *req.StrictMode
 	}
+	queryRewrite := s.cfg.RAG.QueryRewriteEnabled
+	if req.QueryRewrite != nil {
+		queryRewrite = *req.QueryRewrite
+	}
+	queryRewriteMaxQueries := s.cfg.RAG.QueryRewriteMaxQueries
+	if queryRewriteMaxQueries <= 0 {
+		queryRewriteMaxQueries = 3
+	}
+	if queryRewriteMaxQueries > 5 {
+		queryRewriteMaxQueries = 5
+	}
 
 	return rag.Request{
-		UserID:           req.UserID,
-		KnowledgeBaseID:  req.KnowledgeBaseID,
-		Question:         req.Question,
-		TopK:             topK,
-		ScoreThreshold:   scoreThreshold,
-		MaxContextTokens: maxContextTokens,
-		StrictMode:       strictMode,
+		UserID:                      req.UserID,
+		KnowledgeBaseID:             req.KnowledgeBaseID,
+		Question:                    req.Question,
+		TopK:                        topK,
+		ScoreThreshold:              scoreThreshold,
+		MaxContextTokens:            maxContextTokens,
+		StrictMode:                  strictMode,
+		QueryRewrite:                queryRewrite,
+		QueryRewriteMaxQueries:      queryRewriteMaxQueries,
+		QueryRewriteIncludeOriginal: s.cfg.RAG.QueryRewriteIncludeOriginal,
 	}, nil
 }
 

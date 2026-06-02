@@ -45,6 +45,10 @@ func main() {
 	if err != nil {
 		logger.Logger.Fatal("初始化 Eino ChatModel 失败", zap.Error(err))
 	}
+	rewriteChatModel, err := einoapp.NewChatModelWithTemperature(context.Background(), cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.ChatModel, cfg.RAG.QueryRewriteModelTemperature)
+	if err != nil {
+		logger.Logger.Fatal("初始化查询改写模型失败", zap.Error(err))
+	}
 
 	userRepo := repository.NewUserRepository(db)
 	kbRepo := repository.NewKnowledgeBaseRepository(db)
@@ -52,12 +56,13 @@ func main() {
 	chunkRepo := repository.NewChunkRepository(db)
 	chatLogRepo := repository.NewChatLogRepository(db)
 	ragRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
+	queryRewriter := rag.NewLLMQueryRewriter(rewriteChatModel)
 
 	indexer := document.NewIndexer(db, qdrant, embedder, cfg)
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
 	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, cfg)
-	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, chatModel, cfg)
+	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, chatModel, cfg)
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
 	}

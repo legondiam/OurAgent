@@ -22,20 +22,24 @@ type RetrieveRequest struct {
 }
 
 type RetrievedChunk struct {
-	Chunk        model.DocumentParentChunk
-	MatchedChunk model.DocumentChildChunk
-	Document     model.Document
-	Score        float64
+	Chunk          model.DocumentParentChunk
+	MatchedChunk   model.DocumentChildChunk
+	Document       model.Document
+	Score          float64
+	MatchedQueries []string
 }
 
 type Request struct {
-	UserID           uint64
-	KnowledgeBaseID  uint64
-	Question         string
-	TopK             int
-	ScoreThreshold   float64
-	MaxContextTokens int
-	StrictMode       bool
+	UserID                      uint64
+	KnowledgeBaseID             uint64
+	Question                    string
+	TopK                        int
+	ScoreThreshold              float64
+	MaxContextTokens            int
+	StrictMode                  bool
+	QueryRewrite                bool
+	QueryRewriteMaxQueries      int
+	QueryRewriteIncludeOriginal bool
 }
 
 type PreparedChat struct {
@@ -67,28 +71,38 @@ type Source struct {
 }
 
 type RetrievalTrace struct {
-	Query             string     `json:"query"`
-	TopK              int        `json:"top_k"`
-	ScoreThreshold    float64    `json:"score_threshold"`
-	MaxContextTokens  int        `json:"max_context_tokens"`
-	StrictMode        bool       `json:"strict_mode"`
-	Hits              []TraceHit `json:"hits"`
-	UsedChunkCount    int        `json:"used_chunk_count"`
-	FilteredCount     int        `json:"filtered_count"`
-	ContextTokenCount int        `json:"context_token_count"`
-	RejectReason      string     `json:"reject_reason,omitempty"`
+	Query             string       `json:"query"`
+	TopK              int          `json:"top_k"`
+	ScoreThreshold    float64      `json:"score_threshold"`
+	MaxContextTokens  int          `json:"max_context_tokens"`
+	StrictMode        bool         `json:"strict_mode"`
+	RewriteEnabled    bool         `json:"rewrite_enabled"`
+	RewrittenQueries  []TraceQuery `json:"rewritten_queries"`
+	RewriteError      string       `json:"rewrite_error,omitempty"`
+	Hits              []TraceHit   `json:"hits"`
+	UsedChunkCount    int          `json:"used_chunk_count"`
+	FilteredCount     int          `json:"filtered_count"`
+	ContextTokenCount int          `json:"context_token_count"`
+	RejectReason      string       `json:"reject_reason,omitempty"`
 }
 
 type TraceHit struct {
-	ChunkID       uint64  `json:"chunk_id"`
-	DocumentID    uint64  `json:"document_id"`
-	DocumentName  string  `json:"document_name"`
-	SectionPath   string  `json:"section_path"`
-	ParentChunkID uint64  `json:"parent_chunk_id"`
-	ChunkIndex    int     `json:"chunk_index"`
-	Score         float64 `json:"score"`
-	Used          bool    `json:"used"`
-	Reason        string  `json:"reason,omitempty"`
+	ChunkID        uint64   `json:"chunk_id"`
+	DocumentID     uint64   `json:"document_id"`
+	DocumentName   string   `json:"document_name"`
+	SectionPath    string   `json:"section_path"`
+	ParentChunkID  uint64   `json:"parent_chunk_id"`
+	ChunkIndex     int      `json:"chunk_index"`
+	Score          float64  `json:"score"`
+	MatchedQueries []string `json:"matched_queries,omitempty"`
+	Used           bool     `json:"used"`
+	Reason         string   `json:"reason,omitempty"`
+}
+
+type TraceQuery struct {
+	Query  string `json:"query"`
+	Type   string `json:"type"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func NewTrace(req Request, rejectReason string) RetrievalTrace {
@@ -98,7 +112,9 @@ func NewTrace(req Request, rejectReason string) RetrievalTrace {
 		ScoreThreshold:   req.ScoreThreshold,
 		MaxContextTokens: req.MaxContextTokens,
 		StrictMode:       req.StrictMode,
+		RewriteEnabled:   req.QueryRewrite,
 		Hits:             []TraceHit{},
+		RewrittenQueries: []TraceQuery{},
 		RejectReason:     rejectReason,
 	}
 }

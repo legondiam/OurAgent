@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"OurAgent/internal/document"
@@ -24,6 +25,7 @@ const systemPromptTemplate = `你是企业知识库问答助手。
 
 type RAGChain struct {
 	retriever Retriever
+	rewriter  QueryRewriter
 	chat      einomodel.BaseChatModel
 	modelName string
 	template  *einoprompt.DefaultChatTemplate
@@ -33,6 +35,7 @@ type RAGChain struct {
 
 type chainState struct {
 	req           Request
+	queries       []RewrittenQuery
 	results       []RetrievedChunk
 	contextText   string
 	sources       []Source
@@ -44,10 +47,14 @@ type chainState struct {
 	outputTokens  int
 }
 
-func NewRAGChain(ctx context.Context, retriever Retriever, chat einomodel.BaseChatModel, modelName string) (*RAGChain, error) {
+func NewRAGChain(ctx context.Context, retriever Retriever, rewriter QueryRewriter, chat einomodel.BaseChatModel, modelName string) (*RAGChain, error) {
+	if rewriter == nil {
+		rewriter = NewFallbackQueryRewriter()
+	}
 	// chain容器
 	chain := &RAGChain{
 		retriever: retriever,
+		rewriter:  rewriter,
 		chat:      chat,
 		modelName: modelName,
 		template: einoprompt.FromMessages(
@@ -59,6 +66,7 @@ func NewRAGChain(ctx context.Context, retriever Retriever, chat einomodel.BaseCh
 
 	// 普通问答链路
 	invoke, err := compose.NewChain[Request, *PreparedChat]().
+		AppendLambda(compose.InvokableLambda(chain.queryRewriteNode, compose.WithLambdaType("QueryRewriteNode")), compose.WithNodeName("Query Rewrite Node")).
 		AppendLambda(compose.InvokableLambda(chain.retrieveNode, compose.WithLambdaType("RetrieverNode")), compose.WithNodeName("Retriever Node")).
 		AppendLambda(compose.InvokableLambda(chain.contextBuilderNode, compose.WithLambdaType("ContextBuilderNode")), compose.WithNodeName("Context Builder Node")).
 		AppendLambda(compose.InvokableLambda(chain.promptTemplateNode, compose.WithLambdaType("PromptTemplateNode")), compose.WithNodeName("Prompt Template Node")).
@@ -70,6 +78,7 @@ func NewRAGChain(ctx context.Context, retriever Retriever, chat einomodel.BaseCh
 	}
 	// 流式问答链路
 	stream, err := compose.NewChain[Request, StreamChunk]().
+		AppendLambda(compose.InvokableLambda(chain.queryRewriteNode, compose.WithLambdaType("QueryRewriteNode")), compose.WithNodeName("Query Rewrite Node")).
 		AppendLambda(compose.InvokableLambda(chain.retrieveNode, compose.WithLambdaType("RetrieverNode")), compose.WithNodeName("Retriever Node")).
 		AppendLambda(compose.InvokableLambda(chain.contextBuilderNode, compose.WithLambdaType("ContextBuilderNode")), compose.WithNodeName("Context Builder Node")).
 		AppendLambda(compose.InvokableLambda(chain.promptTemplateNode, compose.WithLambdaType("PromptTemplateNode")), compose.WithNodeName("Prompt Template Node")).
@@ -99,22 +108,83 @@ func (c *RAGChain) ModelName() string {
 	return c.modelName
 }
 
-// retrieveNode 检索知识库相关切片
-func (c *RAGChain) retrieveNode(ctx context.Context, req Request) (*chainState, error) {
-	results, err := c.retriever.Retrieve(ctx, RetrieveRequest{
+// queryRewriteNode 生成用于检索的query列表
+func (c *RAGChain) queryRewriteNode(ctx context.Context, req Request) (*chainState, error) {
+	trace := NewTrace(req, "")
+
+	// 根据请求开关选择真实改写器或兜底改写器
+	rewriter := c.rewriter
+	if !req.QueryRewrite {
+		rewriter = NewFallbackQueryRewriter()
+	}
+
+	// 调用改写器生成原问题、改写问题和扩展问题
+	result, err := rewriter.Rewrite(ctx, RewriteRequest{
 		UserID:          req.UserID,
 		KnowledgeBaseID: req.KnowledgeBaseID,
-		Query:           req.Question,
-		TopK:            req.TopK,
+		Question:        req.Question,
+		MaxQueries:      req.QueryRewriteMaxQueries,
+		IncludeOriginal: req.QueryRewriteIncludeOriginal,
 	})
 	if err != nil {
-		return nil, err
+		// 改写失败时记录trace，并退化为只用原问题检索
+		trace.RewriteError = err.Error()
+		result, _ = NewFallbackQueryRewriter().Rewrite(ctx, RewriteRequest{
+			Question:        req.Question,
+			MaxQueries:      1,
+			IncludeOriginal: true,
+		})
 	}
-	return &chainState{
-		req:     req,
-		results: results,
-		trace:   NewTrace(req, ""),
-	}, nil
+
+	// 规范化query列表，并写入trace用于排查检索来源
+	queries := normalizeRewriteResult(req.Question, result)
+	trace.RewrittenQueries = traceQueries(queries)
+	return &chainState{req: req, queries: queries, trace: trace}, nil
+}
+
+// retrieveNode 执行多query检索并合并结果
+func (c *RAGChain) retrieveNode(ctx context.Context, state *chainState) (*chainState, error) {
+	// 使用子chunkID作为去重键合并多路检索结果
+	merged := make(map[uint64]RetrievedChunk)
+	for _, query := range state.queries {
+		// 每个query独立检索一次Qdrant
+		results, err := c.retriever.Retrieve(ctx, RetrieveRequest{
+			UserID:          state.req.UserID,
+			KnowledgeBaseID: state.req.KnowledgeBaseID,
+			Query:           query.Query,
+			TopK:            state.req.TopK,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range results {
+			// 同一个子chunk被多个query命中时只保留一条
+			childID := item.MatchedChunk.ID
+			item.MatchedQueries = appendQuery(item.MatchedQueries, query.Query)
+			existing, ok := merged[childID]
+			if !ok || item.Score > existing.Score {
+				// 新结果分数更高时替换旧结果，并保留历史命中query
+				if ok {
+					item.MatchedQueries = appendQueries(item.MatchedQueries, existing.MatchedQueries)
+				}
+				merged[childID] = item
+				continue
+			}
+			// 旧结果分数更高时只补充当前命中query
+			existing.MatchedQueries = appendQuery(existing.MatchedQueries, query.Query)
+			merged[childID] = existing
+		}
+	}
+
+	// map转为列表后按最终相似度降序排序
+	state.results = make([]RetrievedChunk, 0, len(merged))
+	for _, item := range merged {
+		state.results = append(state.results, item)
+	}
+	sort.SliceStable(state.results, func(i, j int) bool {
+		return state.results[i].Score > state.results[j].Score
+	})
+	return state, nil
 }
 
 // contextBuilderNode 构建上下文和检索trace
@@ -133,13 +203,14 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 
 		// 先记录命中切片的基础trace信息
 		hit := TraceHit{
-			ChunkID:       item.MatchedChunk.ID,
-			DocumentID:    item.Chunk.DocumentID,
-			DocumentName:  item.Document.Filename,
-			SectionPath:   item.MatchedChunk.SectionPath,
-			ParentChunkID: item.Chunk.ID,
-			ChunkIndex:    item.MatchedChunk.ChunkIndex,
-			Score:         item.Score,
+			ChunkID:        item.MatchedChunk.ID,
+			DocumentID:     item.Chunk.DocumentID,
+			DocumentName:   item.Document.Filename,
+			SectionPath:    item.MatchedChunk.SectionPath,
+			ParentChunkID:  item.Chunk.ID,
+			ChunkIndex:     item.MatchedChunk.ChunkIndex,
+			Score:          item.Score,
+			MatchedQueries: item.MatchedQueries,
 		}
 
 		// 过滤低于相似度阈值的切片
@@ -338,4 +409,47 @@ func preview(text string, max int) string {
 		return string(runes)
 	}
 	return string(runes[:max]) + "..."
+}
+
+func normalizeRewriteResult(question string, result *RewriteResult) []RewrittenQuery {
+	if result == nil {
+		return []RewrittenQuery{{Query: strings.TrimSpace(question), Type: QueryTypeOriginal}}
+	}
+	queries := dedupeRewrittenQueries(result.Queries)
+	if len(queries) == 0 {
+		queries = append(queries, RewrittenQuery{Query: strings.TrimSpace(question), Type: QueryTypeOriginal})
+	}
+	return queries
+}
+
+func traceQueries(queries []RewrittenQuery) []TraceQuery {
+	items := make([]TraceQuery, 0, len(queries))
+	for _, query := range queries {
+		items = append(items, TraceQuery{
+			Query:  query.Query,
+			Type:   query.Type,
+			Reason: query.Reason,
+		})
+	}
+	return items
+}
+
+func appendQueries(existing []string, queries []string) []string {
+	for _, query := range queries {
+		existing = appendQuery(existing, query)
+	}
+	return existing
+}
+
+func appendQuery(existing []string, query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return existing
+	}
+	for _, item := range existing {
+		if item == query {
+			return existing
+		}
+	}
+	return append(existing, query)
 }

@@ -40,12 +40,18 @@ type LLMConfig struct {
 }
 
 type RAGConfig struct {
-	ChunkSize        int     `yaml:"chunk_size" mapstructure:"chunk_size"`
-	ChunkOverlap     int     `yaml:"chunk_overlap" mapstructure:"chunk_overlap"`
-	TopK             int     `yaml:"top_k" mapstructure:"top_k"`
-	ScoreThreshold   float64 `yaml:"score_threshold" mapstructure:"score_threshold"`
-	MaxContextTokens int     `yaml:"max_context_tokens" mapstructure:"max_context_tokens"`
-	StrictMode       bool    `yaml:"strict_mode" mapstructure:"strict_mode"`
+	ChunkSize                    int     `yaml:"chunk_size" mapstructure:"chunk_size"`
+	ChunkOverlap                 int     `yaml:"chunk_overlap" mapstructure:"chunk_overlap"`
+	TopK                         int     `yaml:"top_k" mapstructure:"top_k"`
+	ScoreThreshold               float64 `yaml:"score_threshold" mapstructure:"score_threshold"`
+	MaxContextTokens             int     `yaml:"max_context_tokens" mapstructure:"max_context_tokens"`
+	StrictMode                   bool    `yaml:"strict_mode" mapstructure:"strict_mode"`
+	QueryRewriteEnabled          bool    `yaml:"query_rewrite_enabled" mapstructure:"query_rewrite_enabled"`
+	QueryRewriteMaxQueries       int     `yaml:"query_rewrite_max_queries" mapstructure:"query_rewrite_max_queries"`
+	QueryRewriteIncludeOriginal  bool    `yaml:"query_rewrite_include_original" mapstructure:"query_rewrite_include_original"`
+	QueryRewriteModelTemperature float64 `yaml:"query_rewrite_model_temperature" mapstructure:"query_rewrite_model_temperature"`
+	QueryRewriteHydeEnabled      bool    `yaml:"query_rewrite_hyde_enabled" mapstructure:"query_rewrite_hyde_enabled"`
+	QueryRewriteStepBackEnabled  bool    `yaml:"query_rewrite_step_back_enabled" mapstructure:"query_rewrite_step_back_enabled"`
 }
 
 type JWTConfig struct {
@@ -93,6 +99,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.score_threshold", 0.3)
 	v.SetDefault("rag.max_context_tokens", 6000)
 	v.SetDefault("rag.strict_mode", true)
+	v.SetDefault("rag.query_rewrite_enabled", true)
+	v.SetDefault("rag.query_rewrite_max_queries", 3)
+	v.SetDefault("rag.query_rewrite_include_original", true)
+	v.SetDefault("rag.query_rewrite_model_temperature", 0.1)
+	v.SetDefault("rag.query_rewrite_hyde_enabled", false)
+	v.SetDefault("rag.query_rewrite_step_back_enabled", false)
 	v.SetDefault("jwt.expires_hours", 168)
 	v.SetDefault("storage.document_dir", "storage/documents")
 }
@@ -105,6 +117,8 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("llm.api_key", "OPENAI_API_KEY")
 	_ = v.BindEnv("llm.chat_model", "CHAT_MODEL")
 	_ = v.BindEnv("llm.embedding_model", "EMBEDDING_MODEL")
+	_ = v.BindEnv("rag.query_rewrite_enabled", "QUERY_REWRITE_ENABLED")
+	_ = v.BindEnv("rag.query_rewrite_max_queries", "QUERY_REWRITE_MAX_QUERIES")
 	_ = v.BindEnv("jwt.secret", "JWT_SECRET")
 }
 
@@ -126,6 +140,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.RAG.MaxContextTokens == 0 {
 		cfg.RAG.MaxContextTokens = 6000
+	}
+	if cfg.RAG.QueryRewriteMaxQueries <= 0 {
+		cfg.RAG.QueryRewriteMaxQueries = 3
+	}
+	if cfg.RAG.QueryRewriteMaxQueries > 5 {
+		cfg.RAG.QueryRewriteMaxQueries = 5
+	}
+	if cfg.RAG.QueryRewriteModelTemperature < 0 {
+		cfg.RAG.QueryRewriteModelTemperature = 0.1
 	}
 	if cfg.JWT.ExpiresHours == 0 {
 		cfg.JWT.ExpiresHours = 168

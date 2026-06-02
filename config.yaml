@@ -21,6 +21,12 @@ rag:
   score_threshold: 0.3
   max_context_tokens: 6000
   strict_mode: true
+  query_rewrite_enabled: true
+  query_rewrite_max_queries: 3
+  query_rewrite_include_original: true
+  query_rewrite_model_temperature: 0.1
+  query_rewrite_hyde_enabled: false
+  query_rewrite_step_back_enabled: false
 
 jwt:
   secret: "${JWT_SECRET}"

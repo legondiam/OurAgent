@@ -25,6 +25,7 @@ type chatRequest struct {
 	ScoreThreshold   *float64 `json:"score_threshold"`
 	MaxContextTokens int      `json:"max_context_tokens"`
 	StrictMode       *bool    `json:"strict_mode"`
+	QueryRewrite     *bool    `json:"query_rewrite"`
 }
 
 type feedbackRequest struct {
@@ -60,6 +61,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		ScoreThreshold:   req.ScoreThreshold,
 		MaxContextTokens: req.MaxContextTokens,
 		StrictMode:       req.StrictMode,
+		QueryRewrite:     req.QueryRewrite,
 	})
 	if err != nil {
 		handleChatError(c, err, "问答失败")
@@ -95,6 +97,7 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 		ScoreThreshold:   req.ScoreThreshold,
 		MaxContextTokens: req.MaxContextTokens,
 		StrictMode:       req.StrictMode,
+		QueryRewrite:     req.QueryRewrite,
 	})
 	if err != nil {
 		handleChatError(c, err, "问答失败")
