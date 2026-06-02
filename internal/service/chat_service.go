@@ -69,17 +69,20 @@ func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository
 // Chat 执行知识库检索并生成回答
 func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	start := time.Now()
+
+	// 校验业务权限并补齐检索参数
 	resolved, prepared, err := s.validate(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	// 没有提前拒答时进入RAGChain
 	if prepared == nil {
 		prepared, err = s.chain.Invoke(ctx, resolved)
 		if err != nil {
 			return nil, err
 		}
 	}
-
+	// 保存问答日志并返回引用来源
 	logID, err := s.saveLog(prepared, start)
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "保存问答日志失败")
@@ -90,14 +93,15 @@ func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 // Stream 执行知识库检索并流式生成回答
 func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	start := time.Now()
+	// 校验业务权限并补齐检索参数
 	resolved, prepared, err := s.validate(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-
 	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
+		// 校验阶段已经拒答时直接返回流式事件
 		if prepared != nil && prepared.Answer != "" {
 			logID, err := s.saveLog(prepared, start)
 			if err != nil {
@@ -110,6 +114,7 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 			return
 		}
 
+		// 调用流式RAGChain并获取输出reader
 		reader, err := s.chain.Stream(ctx, resolved)
 		if err != nil {
 			out <- StreamEvent{Type: "error", Err: err}
@@ -117,6 +122,8 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 		}
 		defer reader.Close()
 		var final *rag.PreparedChat
+
+		// 持续读取模型片段，最终结果用于落库
 		for {
 			chunk, err := reader.Recv()
 			if stderrors.Is(err, io.EOF) {
@@ -134,6 +141,8 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 				out <- StreamEvent{Type: "message", Content: chunk.Content}
 			}
 		}
+
+		// 没有收到最终结果时兜底拒答
 		if final == nil {
 			final = &rag.PreparedChat{
 				Request: resolved,
@@ -142,6 +151,8 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 				Trace:   rag.NewTrace(resolved, "流式回答没有返回最终结果"),
 			}
 		}
+
+		// 流式结束后保存日志并发送来源和完成事件
 		logID, err := s.saveLog(final, start)
 		if err != nil {
 			out <- StreamEvent{Type: "error", Err: pkgerrors.WithMessage(err, "保存问答日志失败")}

@@ -135,6 +135,7 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 			ChunkID:      item.Chunk.ID,
 			DocumentID:   item.Chunk.DocumentID,
 			DocumentName: item.Document.Filename,
+			SectionPath:  item.Chunk.SectionPath,
 			ChunkIndex:   item.Chunk.ChunkIndex,
 			Score:        item.Score,
 		}
@@ -166,6 +167,7 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 		state.sources = append(state.sources, Source{
 			DocumentID:     item.Chunk.DocumentID,
 			DocumentName:   item.Document.Filename,
+			SectionPath:    item.Chunk.SectionPath,
 			ChunkID:        item.Chunk.ID,
 			ChunkIndex:     item.Chunk.ChunkIndex,
 			Score:          item.Score,
@@ -313,6 +315,9 @@ func previewPrompt(contextText, question string, max int) string {
 }
 
 func buildSourceBlock(index int, item RetrievedChunk) string {
+	if strings.TrimSpace(item.Chunk.SectionPath) != "" {
+		return fmt.Sprintf("[来源 %d: %s / %s / chunk %d]\n%s\n\n", index, item.Document.Filename, item.Chunk.SectionPath, item.Chunk.ChunkIndex, item.Chunk.Content)
+	}
 	return fmt.Sprintf("[来源 %d: %s / chunk %d]\n%s\n\n", index, item.Document.Filename, item.Chunk.ChunkIndex, item.Chunk.Content)
 }
 

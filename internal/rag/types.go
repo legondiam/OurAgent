@@ -57,6 +57,7 @@ type StreamChunk struct {
 type Source struct {
 	DocumentID     uint64  `json:"document_id"`
 	DocumentName   string  `json:"document_name"`
+	SectionPath    string  `json:"section_path"`
 	ChunkID        uint64  `json:"chunk_id"`
 	ChunkIndex     int     `json:"chunk_index"`
 	Score          float64 `json:"score"`
@@ -80,6 +81,7 @@ type TraceHit struct {
 	ChunkID      uint64  `json:"chunk_id"`
 	DocumentID   uint64  `json:"document_id"`
 	DocumentName string  `json:"document_name"`
+	SectionPath  string  `json:"section_path"`
 	ChunkIndex   int     `json:"chunk_index"`
 	Score        float64 `json:"score"`
 	Used         bool    `json:"used"`

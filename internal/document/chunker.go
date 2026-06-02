@@ -1,11 +1,27 @@
 package document
 
 import (
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
 
-// SplitText 按段落和长度切分文本 chunk
+type Chunk struct {
+	Content     string
+	SectionPath string
+	TokenCount  int
+}
+
+// SplitDocument 按文件类型切分文档
+func SplitDocument(filename, text string, chunkSize, overlap int) []Chunk {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
+	if ext == "md" || ext == "markdown" {
+		return splitMarkdown(text, chunkSize, overlap)
+	}
+	return wrapPlainChunks(SplitText(text, chunkSize, overlap), "")
+}
+
+// SplitText 按段落和长度切分文本chunk
 func SplitText(text string, chunkSize, overlap int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -58,6 +74,102 @@ func SplitText(text string, chunkSize, overlap int) []string {
 		return chunks
 	}
 	return addOverlap(chunks, overlap, chunkSize)
+}
+
+// splitMarkdown 按Markdown标题层级切分文本
+func splitMarkdown(text string, chunkSize, overlap int) []Chunk {
+	lines := strings.Split(text, "\n")
+	headings := make([]string, 0, 6)
+	var section strings.Builder
+	var sectionPath string
+	var chunks []Chunk
+
+	flush := func() {
+		content := strings.TrimSpace(section.String())
+		if content != "" {
+			chunks = append(chunks, wrapPlainChunks(SplitText(content, chunkSize, overlap), sectionPath)...)
+		}
+		section.Reset()
+	}
+
+	for _, line := range lines {
+		level, title, ok := parseMarkdownHeading(line)
+		if ok {
+			flush()
+			headings = updateHeadingStack(headings, level, title)
+			sectionPath = joinSectionPath(headings)
+			section.WriteString(line)
+			section.WriteString("\n")
+			continue
+		}
+		section.WriteString(line)
+		section.WriteString("\n")
+	}
+	flush()
+	return chunks
+}
+
+// parseMarkdownHeading 解析Markdown标题行
+func parseMarkdownHeading(line string) (int, string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "#") {
+		return 0, "", false
+	}
+	level := 0
+	for level < len(trimmed) && trimmed[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level >= len(trimmed) || trimmed[level] != ' ' {
+		return 0, "", false
+	}
+	title := strings.TrimSpace(trimmed[level:])
+	if title == "" {
+		return 0, "", false
+	}
+	return level, title, true
+}
+
+// updateHeadingStack 更新当前标题层级栈
+func updateHeadingStack(headings []string, level int, title string) []string {
+	if level <= 0 {
+		return headings
+	}
+	if len(headings) >= level {
+		headings = headings[:level-1]
+	}
+	for len(headings) < level-1 {
+		headings = append(headings, "")
+	}
+	return append(headings, title)
+}
+
+// joinSectionPath 拼接标题层级路径
+func joinSectionPath(headings []string) string {
+	parts := make([]string, 0, len(headings))
+	for _, heading := range headings {
+		heading = strings.TrimSpace(heading)
+		if heading != "" {
+			parts = append(parts, heading)
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// wrapPlainChunks 包装普通文本切片
+func wrapPlainChunks(contents []string, sectionPath string) []Chunk {
+	chunks := make([]Chunk, 0, len(contents))
+	for _, content := range contents {
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		chunks = append(chunks, Chunk{
+			Content:     content,
+			SectionPath: sectionPath,
+			TokenCount:  EstimateTokens(content),
+		})
+	}
+	return chunks
 }
 
 func splitParagraphs(text string) []string {

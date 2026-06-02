@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"OurAgent/internal/config"
@@ -61,7 +62,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 	text = NormalizeText(text)
-	chunks := SplitText(text, i.cfg.RAG.ChunkSize, i.cfg.RAG.ChunkOverlap)
+	chunks := SplitDocument(doc.Filename, text, i.cfg.RAG.ChunkSize, i.cfg.RAG.ChunkOverlap)
 	if len(chunks) == 0 {
 		err := fmt.Errorf("文档没有可索引文本")
 		i.fail(doc.ID, err.Error())
@@ -69,8 +70,8 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 	}
 
 	chunkCount := 0
-	for idx, content := range chunks {
-		vectors, err := i.embedder.EmbedStrings(ctx, []string{content})
+	for idx, item := range chunks {
+		vectors, err := i.embedder.EmbedStrings(ctx, []string{embeddingText(item)})
 		if err != nil {
 			i.fail(doc.ID, fmt.Sprintf("生成 embedding 失败: %v", err))
 			return err
@@ -90,8 +91,9 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 			KnowledgeBaseID: doc.KnowledgeBaseID,
 			UserID:          doc.UserID,
 			ChunkIndex:      idx,
-			Content:         content,
-			TokenCount:      EstimateTokens(content),
+			SectionPath:     item.SectionPath,
+			Content:         item.Content,
+			TokenCount:      item.TokenCount,
 		}
 		if err := i.db.Create(&chunk).Error; err != nil {
 			i.fail(doc.ID, fmt.Sprintf("保存 chunk 失败: %v", err))
@@ -105,6 +107,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 			"user_id":           doc.UserID,
 			"chunk_index":       idx,
 			"document_name":     doc.Filename,
+			"section_path":      item.SectionPath,
 		}
 		if err := i.qdrant.Upsert(ctx, chunk.ID, vectors[0], payload); err != nil {
 			i.fail(doc.ID, fmt.Sprintf("写入向量库失败: %v", err))
@@ -120,6 +123,13 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 	}
 
 	return i.updateStatus(doc.ID, "completed", "", chunkCount)
+}
+
+func embeddingText(chunk Chunk) string {
+	if strings.TrimSpace(chunk.SectionPath) == "" {
+		return chunk.Content
+	}
+	return "章节：" + chunk.SectionPath + "\n内容：" + chunk.Content
 }
 
 func (i *Indexer) updateStatus(documentID uint64, status, message string, chunkCount int) error {
