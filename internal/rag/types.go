@@ -22,9 +22,10 @@ type RetrieveRequest struct {
 }
 
 type RetrievedChunk struct {
-	Chunk    model.DocumentChunk
-	Document model.Document
-	Score    float64
+	Chunk        model.DocumentParentChunk
+	MatchedChunk model.DocumentChildChunk
+	Document     model.Document
+	Score        float64
 }
 
 type Request struct {
@@ -58,6 +59,7 @@ type Source struct {
 	DocumentID     uint64  `json:"document_id"`
 	DocumentName   string  `json:"document_name"`
 	SectionPath    string  `json:"section_path"`
+	ParentChunkID  uint64  `json:"parent_chunk_id"`
 	ChunkID        uint64  `json:"chunk_id"`
 	ChunkIndex     int     `json:"chunk_index"`
 	Score          float64 `json:"score"`
@@ -78,14 +80,15 @@ type RetrievalTrace struct {
 }
 
 type TraceHit struct {
-	ChunkID      uint64  `json:"chunk_id"`
-	DocumentID   uint64  `json:"document_id"`
-	DocumentName string  `json:"document_name"`
-	SectionPath  string  `json:"section_path"`
-	ChunkIndex   int     `json:"chunk_index"`
-	Score        float64 `json:"score"`
-	Used         bool    `json:"used"`
-	Reason       string  `json:"reason,omitempty"`
+	ChunkID       uint64  `json:"chunk_id"`
+	DocumentID    uint64  `json:"document_id"`
+	DocumentName  string  `json:"document_name"`
+	SectionPath   string  `json:"section_path"`
+	ParentChunkID uint64  `json:"parent_chunk_id"`
+	ChunkIndex    int     `json:"chunk_index"`
+	Score         float64 `json:"score"`
+	Used          bool    `json:"used"`
+	Reason        string  `json:"reason,omitempty"`
 }
 
 func NewTrace(req Request, rejectReason string) RetrievalTrace {

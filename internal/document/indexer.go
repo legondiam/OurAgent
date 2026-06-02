@@ -51,8 +51,12 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 
-	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentChunk{}).Error; err != nil {
-		i.fail(doc.ID, fmt.Sprintf("删除旧 chunk 失败: %v", err))
+	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentChildChunk{}).Error; err != nil {
+		i.fail(doc.ID, fmt.Sprintf("删除旧子 chunk 失败: %v", err))
+		return err
+	}
+	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentParentChunk{}).Error; err != nil {
+		i.fail(doc.ID, fmt.Sprintf("删除旧父 chunk 失败: %v", err))
 		return err
 	}
 
@@ -69,60 +73,79 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 
-	chunkCount := 0
-	for idx, item := range chunks {
-		vectors, err := i.embedder.EmbedStrings(ctx, []string{embeddingText(item)})
-		if err != nil {
-			i.fail(doc.ID, fmt.Sprintf("生成 embedding 失败: %v", err))
-			return err
-		}
-		if len(vectors) == 0 || len(vectors[0]) == 0 {
-			err := fmt.Errorf("embedding 结果为空")
-			i.fail(doc.ID, err.Error())
-			return err
-		}
-		if err := i.qdrant.EnsureCollection(ctx, len(vectors[0])); err != nil {
-			i.fail(doc.ID, fmt.Sprintf("初始化向量集合失败: %v", err))
-			return err
-		}
-
-		chunk := model.DocumentChunk{
+	childCount := 0
+	for parentIdx, parent := range chunks {
+		parentChunk := model.DocumentParentChunk{
 			DocumentID:      doc.ID,
 			KnowledgeBaseID: doc.KnowledgeBaseID,
 			UserID:          doc.UserID,
-			ChunkIndex:      idx,
-			SectionPath:     item.SectionPath,
-			Content:         item.Content,
-			TokenCount:      item.TokenCount,
+			ChunkIndex:      parentIdx,
+			SectionPath:     parent.SectionPath,
+			Content:         parent.Content,
+			TokenCount:      parent.TokenCount,
 		}
-		if err := i.db.Create(&chunk).Error; err != nil {
-			i.fail(doc.ID, fmt.Sprintf("保存 chunk 失败: %v", err))
+		if err := i.db.Create(&parentChunk).Error; err != nil {
+			i.fail(doc.ID, fmt.Sprintf("保存父 chunk 失败: %v", err))
 			return err
 		}
 
-		payload := map[string]interface{}{
-			"chunk_id":          chunk.ID,
-			"document_id":       doc.ID,
-			"knowledge_base_id": doc.KnowledgeBaseID,
-			"user_id":           doc.UserID,
-			"chunk_index":       idx,
-			"document_name":     doc.Filename,
-			"section_path":      item.SectionPath,
-		}
-		if err := i.qdrant.Upsert(ctx, chunk.ID, vectors[0], payload); err != nil {
-			i.fail(doc.ID, fmt.Sprintf("写入向量库失败: %v", err))
-			return err
-		}
+		for childIdx, child := range parent.Children {
+			vectors, err := i.embedder.EmbedStrings(ctx, []string{embeddingText(child)})
+			if err != nil {
+				i.fail(doc.ID, fmt.Sprintf("生成 embedding 失败: %v", err))
+				return err
+			}
+			if len(vectors) == 0 || len(vectors[0]) == 0 {
+				err := fmt.Errorf("embedding 结果为空")
+				i.fail(doc.ID, err.Error())
+				return err
+			}
+			if err := i.qdrant.EnsureCollection(ctx, len(vectors[0])); err != nil {
+				i.fail(doc.ID, fmt.Sprintf("初始化向量集合失败: %v", err))
+				return err
+			}
 
-		chunk.VectorID = strconv.FormatUint(chunk.ID, 10)
-		if err := i.db.Model(&chunk).Update("vector_id", chunk.VectorID).Error; err != nil {
-			i.fail(doc.ID, fmt.Sprintf("更新 chunk vector_id 失败: %v", err))
-			return err
+			childChunk := model.DocumentChildChunk{
+				DocumentID:      doc.ID,
+				KnowledgeBaseID: doc.KnowledgeBaseID,
+				UserID:          doc.UserID,
+				ParentChunkID:   parentChunk.ID,
+				ChunkIndex:      childIdx,
+				SectionPath:     child.SectionPath,
+				Content:         child.Content,
+				TokenCount:      child.TokenCount,
+			}
+			if err := i.db.Create(&childChunk).Error; err != nil {
+				i.fail(doc.ID, fmt.Sprintf("保存子 chunk 失败: %v", err))
+				return err
+			}
+
+			payload := map[string]interface{}{
+				"chunk_id":          childChunk.ID,
+				"parent_chunk_id":   parentChunk.ID,
+				"chunk_type":        "child",
+				"document_id":       doc.ID,
+				"knowledge_base_id": doc.KnowledgeBaseID,
+				"user_id":           doc.UserID,
+				"chunk_index":       childIdx,
+				"document_name":     doc.Filename,
+				"section_path":      child.SectionPath,
+			}
+			if err := i.qdrant.Upsert(ctx, childChunk.ID, vectors[0], payload); err != nil {
+				i.fail(doc.ID, fmt.Sprintf("写入向量库失败: %v", err))
+				return err
+			}
+
+			childChunk.VectorID = strconv.FormatUint(childChunk.ID, 10)
+			if err := i.db.Model(&childChunk).Update("vector_id", childChunk.VectorID).Error; err != nil {
+				i.fail(doc.ID, fmt.Sprintf("更新子 chunk vector_id 失败: %v", err))
+				return err
+			}
+			childCount++
 		}
-		chunkCount++
 	}
 
-	return i.updateStatus(doc.ID, "completed", "", chunkCount)
+	return i.updateStatus(doc.ID, "completed", "", childCount)
 }
 
 func embeddingText(chunk Chunk) string {

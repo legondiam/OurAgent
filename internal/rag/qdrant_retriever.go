@@ -40,23 +40,39 @@ func (r *QdrantRetriever) Retrieve(ctx context.Context, req RetrieveRequest) ([]
 		return []RetrievedChunk{}, nil
 	}
 
-	chunkIDs := make([]uint64, 0, len(hits))
-	scoreByChunkID := make(map[uint64]float64, len(hits))
+	childIDs := make([]uint64, 0, len(hits))
+	scoreByChildID := make(map[uint64]float64, len(hits))
 	for _, hit := range hits {
-		chunkIDs = append(chunkIDs, hit.ChunkID)
-		scoreByChunkID[hit.ChunkID] = hit.Score
+		childIDs = append(childIDs, hit.ChunkID)
+		scoreByChildID[hit.ChunkID] = hit.Score
 	}
 
-	// 回查MySQL获取切片正文，Qdrant只负责召回和相似度分数
-	chunks, err := r.chunks.FindByIDs(req.UserID, req.KnowledgeBaseID, chunkIDs)
+	// 回查MySQL获取命中的子chunk
+	children, err := r.chunks.FindChildrenByIDs(req.UserID, req.KnowledgeBaseID, childIDs)
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "查询文档切片失败")
 	}
-	chunkByID := make(map[uint64]model.DocumentChunk, len(chunks))
-	documentIDs := make([]uint64, 0, len(chunks))
-	for _, chunk := range chunks {
-		chunkByID[chunk.ID] = chunk
-		documentIDs = append(documentIDs, chunk.DocumentID)
+	childByID := make(map[uint64]model.DocumentChildChunk, len(children))
+	parentIDs := make([]uint64, 0, len(children))
+	documentIDs := make([]uint64, 0, len(children))
+	for _, child := range children {
+		childByID[child.ID] = child
+		if child.ParentChunkID > 0 {
+			parentIDs = append(parentIDs, child.ParentChunkID)
+		} else {
+			parentIDs = append(parentIDs, child.ID)
+		}
+		documentIDs = append(documentIDs, child.DocumentID)
+	}
+
+	// 回查父chunk，LLM阅读父chunk内容
+	parents, err := r.chunks.FindParentsByIDs(req.UserID, req.KnowledgeBaseID, parentIDs)
+	if err != nil {
+		return nil, pkgerrors.WithMessage(err, "查询父文档切片失败")
+	}
+	parentByID := make(map[uint64]model.DocumentParentChunk, len(parents))
+	for _, parent := range parents {
+		parentByID[parent.ID] = parent
 	}
 
 	// 回查文档信息，用于生成来源名称和检索trace
@@ -72,14 +88,23 @@ func (r *QdrantRetriever) Retrieve(ctx context.Context, req RetrieveRequest) ([]
 	// 按Qdrant命中结果组装完整切片，并保留对应相似度分数
 	results := make([]RetrievedChunk, 0, len(hits))
 	for _, hit := range hits {
-		chunk, ok := chunkByID[hit.ChunkID]
+		child, ok := childByID[hit.ChunkID]
+		if !ok {
+			continue
+		}
+		parentID := child.ParentChunkID
+		if parentID == 0 {
+			parentID = child.ID
+		}
+		parent, ok := parentByID[parentID]
 		if !ok {
 			continue
 		}
 		results = append(results, RetrievedChunk{
-			Chunk:    chunk,
-			Document: docByID[chunk.DocumentID],
-			Score:    scoreByChunkID[chunk.ID],
+			Chunk:        parent,
+			MatchedChunk: child,
+			Document:     docByID[child.DocumentID],
+			Score:        scoreByChildID[child.ID],
 		})
 	}
 	sort.SliceStable(results, func(i, j int) bool {

@@ -38,8 +38,21 @@ type Document struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
-type DocumentChunk struct {
+type DocumentParentChunk struct {
 	ID              uint64    `gorm:"primaryKey" json:"id"`
+	DocumentID      uint64    `gorm:"index;not null" json:"document_id"`
+	KnowledgeBaseID uint64    `gorm:"index;not null" json:"knowledge_base_id"`
+	UserID          uint64    `gorm:"index;not null" json:"user_id"`
+	ChunkIndex      int       `gorm:"not null" json:"chunk_index"`
+	SectionPath     string    `gorm:"size:1024" json:"section_path"`
+	Content         string    `gorm:"type:longtext;not null" json:"content"`
+	TokenCount      int       `json:"token_count"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type DocumentChildChunk struct {
+	ID              uint64    `gorm:"primaryKey" json:"id"`
+	ParentChunkID   uint64    `gorm:"index;not null" json:"parent_chunk_id"`
 	DocumentID      uint64    `gorm:"index;not null" json:"document_id"`
 	KnowledgeBaseID uint64    `gorm:"index;not null" json:"knowledge_base_id"`
 	UserID          uint64    `gorm:"index;not null" json:"user_id"`

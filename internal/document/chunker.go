@@ -12,13 +12,20 @@ type Chunk struct {
 	TokenCount  int
 }
 
+type ParentChunk struct {
+	Content     string
+	SectionPath string
+	TokenCount  int
+	Children    []Chunk
+}
+
 // SplitDocument 按文件类型切分文档
-func SplitDocument(filename, text string, chunkSize, overlap int) []Chunk {
+func SplitDocument(filename, text string, chunkSize, overlap int) []ParentChunk {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
 	if ext == "md" || ext == "markdown" {
 		return splitMarkdown(text, chunkSize, overlap)
 	}
-	return wrapPlainChunks(SplitText(text, chunkSize, overlap), "")
+	return splitPlainDocument(text, chunkSize, overlap)
 }
 
 // SplitText 按段落和长度切分文本chunk
@@ -77,17 +84,17 @@ func SplitText(text string, chunkSize, overlap int) []string {
 }
 
 // splitMarkdown 按Markdown标题层级切分文本
-func splitMarkdown(text string, chunkSize, overlap int) []Chunk {
+func splitMarkdown(text string, chunkSize, overlap int) []ParentChunk {
 	lines := strings.Split(text, "\n")
 	headings := make([]string, 0, 6)
 	var section strings.Builder
 	var sectionPath string
-	var chunks []Chunk
+	var parents []ParentChunk
 
 	flush := func() {
 		content := strings.TrimSpace(section.String())
 		if content != "" {
-			chunks = append(chunks, wrapPlainChunks(SplitText(content, chunkSize, overlap), sectionPath)...)
+			parents = append(parents, buildParentChunk(content, sectionPath, chunkSize, overlap))
 		}
 		section.Reset()
 	}
@@ -106,7 +113,21 @@ func splitMarkdown(text string, chunkSize, overlap int) []Chunk {
 		section.WriteString("\n")
 	}
 	flush()
-	return chunks
+	return parents
+}
+
+// splitPlainDocument 按父子切割处理无结构文本
+func splitPlainDocument(text string, chunkSize, overlap int) []ParentChunk {
+	parentSize := chunkSize * 3
+	if parentSize <= 0 {
+		parentSize = 3000
+	}
+	parentTexts := SplitText(text, parentSize, overlap)
+	parents := make([]ParentChunk, 0, len(parentTexts))
+	for _, parentText := range parentTexts {
+		parents = append(parents, buildParentChunk(parentText, "", chunkSize, overlap))
+	}
+	return parents
 }
 
 // parseMarkdownHeading 解析Markdown标题行
@@ -153,6 +174,17 @@ func joinSectionPath(headings []string) string {
 		}
 	}
 	return strings.Join(parts, "/")
+}
+
+// buildParentChunk 构建父chunk和用于检索的子chunk
+func buildParentChunk(content, sectionPath string, chunkSize, overlap int) ParentChunk {
+	children := wrapPlainChunks(SplitText(content, chunkSize, overlap), sectionPath)
+	return ParentChunk{
+		Content:     content,
+		SectionPath: sectionPath,
+		TokenCount:  EstimateTokens(content),
+		Children:    children,
+	}
 }
 
 // wrapPlainChunks 包装普通文本切片

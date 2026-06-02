@@ -18,7 +18,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.KnowledgeBase{},
 		&model.Document{},
-		&model.DocumentChunk{},
+		&model.DocumentParentChunk{},
+		&model.DocumentChildChunk{},
 		&model.ChatLog{},
 		&model.ChatFeedback{},
 	)

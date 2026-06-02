@@ -122,8 +122,9 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 	var builder strings.Builder
 	state.sources = make([]Source, 0, len(state.results))
 	usedTokens := 0
+	usedParentIDs := make(map[uint64]struct{})
 
-	for i, item := range state.results {
+	for _, item := range state.results {
 		// 获取切片token数，缺失时按正文估算
 		tokens := item.Chunk.TokenCount
 		if tokens == 0 {
@@ -132,12 +133,13 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 
 		// 先记录命中切片的基础trace信息
 		hit := TraceHit{
-			ChunkID:      item.Chunk.ID,
-			DocumentID:   item.Chunk.DocumentID,
-			DocumentName: item.Document.Filename,
-			SectionPath:  item.Chunk.SectionPath,
-			ChunkIndex:   item.Chunk.ChunkIndex,
-			Score:        item.Score,
+			ChunkID:       item.MatchedChunk.ID,
+			DocumentID:    item.Chunk.DocumentID,
+			DocumentName:  item.Document.Filename,
+			SectionPath:   item.MatchedChunk.SectionPath,
+			ParentChunkID: item.Chunk.ID,
+			ChunkIndex:    item.MatchedChunk.ChunkIndex,
+			Score:         item.Score,
 		}
 
 		// 过滤低于相似度阈值的切片
@@ -155,23 +157,32 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 			state.trace.Hits = append(state.trace.Hits, hit)
 			continue
 		}
+		// 过滤重复父chunk
+		if _, exists := usedParentIDs[item.Chunk.ID]; exists {
+			hit.Reason = "父chunk已进入上下文"
+			state.trace.FilteredCount++
+			state.trace.Hits = append(state.trace.Hits, hit)
+			continue
+		}
 
 		// 将可用切片写入上下文并记录来源
 		hit.Used = true
 		state.trace.UsedChunkCount++
 		state.trace.ContextTokenCount += tokens
 		state.trace.Hits = append(state.trace.Hits, hit)
-		builder.WriteString(buildSourceBlock(i+1, item))
+		usedParentIDs[item.Chunk.ID] = struct{}{}
+		builder.WriteString(buildSourceBlock(len(state.sources)+1, item))
 		usedTokens += tokens
 
 		state.sources = append(state.sources, Source{
 			DocumentID:     item.Chunk.DocumentID,
 			DocumentName:   item.Document.Filename,
-			SectionPath:    item.Chunk.SectionPath,
-			ChunkID:        item.Chunk.ID,
-			ChunkIndex:     item.Chunk.ChunkIndex,
+			SectionPath:    item.MatchedChunk.SectionPath,
+			ParentChunkID:  item.Chunk.ID,
+			ChunkID:        item.MatchedChunk.ID,
+			ChunkIndex:     item.MatchedChunk.ChunkIndex,
 			Score:          item.Score,
-			ContentPreview: preview(item.Chunk.Content, 160),
+			ContentPreview: preview(item.MatchedChunk.Content, 160),
 		})
 	}
 
