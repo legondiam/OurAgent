@@ -17,6 +17,7 @@ type Config struct {
 	RAG     RAGConfig     `yaml:"rag" mapstructure:"rag"`
 	JWT     JWTConfig     `yaml:"jwt" mapstructure:"jwt"`
 	Storage StorageConfig `yaml:"storage" mapstructure:"storage"`
+	Search  SearchConfig  `yaml:"search" mapstructure:"search"`
 }
 
 type ServerConfig struct {
@@ -52,6 +53,10 @@ type RAGConfig struct {
 	QueryRewriteModelTemperature float64 `yaml:"query_rewrite_model_temperature" mapstructure:"query_rewrite_model_temperature"`
 	QueryRewriteHydeEnabled      bool    `yaml:"query_rewrite_hyde_enabled" mapstructure:"query_rewrite_hyde_enabled"`
 	QueryRewriteStepBackEnabled  bool    `yaml:"query_rewrite_step_back_enabled" mapstructure:"query_rewrite_step_back_enabled"`
+	HybridEnabled                bool    `yaml:"hybrid_enabled" mapstructure:"hybrid_enabled"`
+	BM25Enabled                  bool    `yaml:"bm25_enabled" mapstructure:"bm25_enabled"`
+	BM25TopK                     int     `yaml:"bm25_top_k" mapstructure:"bm25_top_k"`
+	RRFK                         int     `yaml:"rrf_k" mapstructure:"rrf_k"`
 }
 
 type JWTConfig struct {
@@ -61,6 +66,10 @@ type JWTConfig struct {
 
 type StorageConfig struct {
 	DocumentDir string `yaml:"document_dir" mapstructure:"document_dir"`
+}
+
+type SearchConfig struct {
+	BlugeDir string `yaml:"bluge_dir" mapstructure:"bluge_dir"`
 }
 
 // Load 读取并初始化应用配置
@@ -105,8 +114,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.query_rewrite_model_temperature", 0.1)
 	v.SetDefault("rag.query_rewrite_hyde_enabled", false)
 	v.SetDefault("rag.query_rewrite_step_back_enabled", false)
+	v.SetDefault("rag.hybrid_enabled", true)
+	v.SetDefault("rag.bm25_enabled", true)
+	v.SetDefault("rag.bm25_top_k", 5)
+	v.SetDefault("rag.rrf_k", 60)
 	v.SetDefault("jwt.expires_hours", 168)
 	v.SetDefault("storage.document_dir", "storage/documents")
+	v.SetDefault("search.bluge_dir", "storage/bluge")
 }
 
 func bindEnv(v *viper.Viper) {
@@ -119,7 +133,12 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("llm.embedding_model", "EMBEDDING_MODEL")
 	_ = v.BindEnv("rag.query_rewrite_enabled", "QUERY_REWRITE_ENABLED")
 	_ = v.BindEnv("rag.query_rewrite_max_queries", "QUERY_REWRITE_MAX_QUERIES")
+	_ = v.BindEnv("rag.hybrid_enabled", "HYBRID_ENABLED")
+	_ = v.BindEnv("rag.bm25_enabled", "BM25_ENABLED")
+	_ = v.BindEnv("rag.bm25_top_k", "BM25_TOP_K")
+	_ = v.BindEnv("rag.rrf_k", "RRF_K")
 	_ = v.BindEnv("jwt.secret", "JWT_SECRET")
+	_ = v.BindEnv("search.bluge_dir", "BLUGE_DIR")
 }
 
 func applyDefaults(cfg *Config) {
@@ -150,11 +169,20 @@ func applyDefaults(cfg *Config) {
 	if cfg.RAG.QueryRewriteModelTemperature < 0 {
 		cfg.RAG.QueryRewriteModelTemperature = 0.1
 	}
+	if cfg.RAG.BM25TopK <= 0 {
+		cfg.RAG.BM25TopK = 5
+	}
+	if cfg.RAG.RRFK <= 0 {
+		cfg.RAG.RRFK = 60
+	}
 	if cfg.JWT.ExpiresHours == 0 {
 		cfg.JWT.ExpiresHours = 168
 	}
 	if cfg.Storage.DocumentDir == "" {
 		cfg.Storage.DocumentDir = "storage/documents"
+	}
+	if cfg.Search.BlugeDir == "" {
+		cfg.Search.BlugeDir = "storage/bluge"
 	}
 }
 
@@ -168,4 +196,5 @@ func expandEnv(cfg *Config) {
 	cfg.LLM.EmbeddingModel = os.ExpandEnv(cfg.LLM.EmbeddingModel)
 	cfg.JWT.Secret = os.ExpandEnv(cfg.JWT.Secret)
 	cfg.Storage.DocumentDir = os.ExpandEnv(cfg.Storage.DocumentDir)
+	cfg.Search.BlugeDir = os.ExpandEnv(cfg.Search.BlugeDir)
 }

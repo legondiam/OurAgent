@@ -26,6 +26,8 @@ type chatRequest struct {
 	MaxContextTokens int      `json:"max_context_tokens"`
 	StrictMode       *bool    `json:"strict_mode"`
 	QueryRewrite     *bool    `json:"query_rewrite"`
+	Hybrid           *bool    `json:"hybrid"`
+	BM25TopK         int      `json:"bm25_top_k"`
 }
 
 type feedbackRequest struct {
@@ -62,6 +64,8 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		MaxContextTokens: req.MaxContextTokens,
 		StrictMode:       req.StrictMode,
 		QueryRewrite:     req.QueryRewrite,
+		Hybrid:           req.Hybrid,
+		BM25TopK:         req.BM25TopK,
 	})
 	if err != nil {
 		handleChatError(c, err, "问答失败")
@@ -98,6 +102,8 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 		MaxContextTokens: req.MaxContextTokens,
 		StrictMode:       req.StrictMode,
 		QueryRewrite:     req.QueryRewrite,
+		Hybrid:           req.Hybrid,
+		BM25TopK:         req.BM25TopK,
 	})
 	if err != nil {
 		handleChatError(c, err, "问答失败")

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sort"
 
-	"OurAgent/internal/model"
 	"OurAgent/internal/repository"
 	"OurAgent/internal/vectorstore"
 
@@ -40,72 +39,17 @@ func (r *QdrantRetriever) Retrieve(ctx context.Context, req RetrieveRequest) ([]
 		return []RetrievedChunk{}, nil
 	}
 
-	childIDs := make([]uint64, 0, len(hits))
-	scoreByChildID := make(map[uint64]float64, len(hits))
+	childHits := make([]childHit, 0, len(hits))
 	for _, hit := range hits {
-		childIDs = append(childIDs, hit.ChunkID)
-		scoreByChildID[hit.ChunkID] = hit.Score
+		childHits = append(childHits, childHit{ChildID: hit.ChunkID, Score: hit.Score})
 	}
-
-	// 回查MySQL获取命中的子chunk
-	children, err := r.chunks.FindChildrenByIDs(req.UserID, req.KnowledgeBaseID, childIDs)
+	results, err := loadRetrievedChunks(ctx, r.docs, r.chunks, req.UserID, req.KnowledgeBaseID, childHits)
 	if err != nil {
-		return nil, pkgerrors.WithMessage(err, "查询文档切片失败")
+		return nil, err
 	}
-	childByID := make(map[uint64]model.DocumentChildChunk, len(children))
-	parentIDs := make([]uint64, 0, len(children))
-	documentIDs := make([]uint64, 0, len(children))
-	for _, child := range children {
-		childByID[child.ID] = child
-		if child.ParentChunkID > 0 {
-			parentIDs = append(parentIDs, child.ParentChunkID)
-		} else {
-			parentIDs = append(parentIDs, child.ID)
-		}
-		documentIDs = append(documentIDs, child.DocumentID)
-	}
-
-	// 回查父chunk，LLM阅读父chunk内容
-	parents, err := r.chunks.FindParentsByIDs(req.UserID, req.KnowledgeBaseID, parentIDs)
-	if err != nil {
-		return nil, pkgerrors.WithMessage(err, "查询父文档切片失败")
-	}
-	parentByID := make(map[uint64]model.DocumentParentChunk, len(parents))
-	for _, parent := range parents {
-		parentByID[parent.ID] = parent
-	}
-
-	// 回查文档信息，用于生成来源名称和检索trace
-	docs, err := r.docs.FindByIDsAndUserID(documentIDs, req.UserID)
-	if err != nil {
-		return nil, pkgerrors.WithMessage(err, "查询文档失败")
-	}
-	docByID := make(map[uint64]model.Document, len(docs))
-	for _, doc := range docs {
-		docByID[doc.ID] = doc
-	}
-
-	// 按Qdrant命中结果组装完整切片，并保留对应相似度分数
-	results := make([]RetrievedChunk, 0, len(hits))
-	for _, hit := range hits {
-		child, ok := childByID[hit.ChunkID]
-		if !ok {
-			continue
-		}
-		parentID := child.ParentChunkID
-		if parentID == 0 {
-			parentID = child.ID
-		}
-		parent, ok := parentByID[parentID]
-		if !ok {
-			continue
-		}
-		results = append(results, RetrievedChunk{
-			Chunk:        parent,
-			MatchedChunk: child,
-			Document:     docByID[child.DocumentID],
-			Score:        scoreByChildID[child.ID],
-		})
+	for i := range results {
+		results[i].VectorScore = results[i].Score
+		results[i].RecallSources = appendQuery(results[i].RecallSources, "vector")
 	}
 	sort.SliceStable(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score

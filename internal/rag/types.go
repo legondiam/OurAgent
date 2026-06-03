@@ -18,7 +18,13 @@ type RetrieveRequest struct {
 	UserID          uint64
 	KnowledgeBaseID uint64
 	Query           string
+	Queries         []RewrittenQuery
 	TopK            int
+	BM25TopK        int
+	HybridEnabled   bool
+	BM25Enabled     bool
+	RRFK            int
+	Trace           *RetrievalTrace
 }
 
 type RetrievedChunk struct {
@@ -27,6 +33,10 @@ type RetrievedChunk struct {
 	Document       model.Document
 	Score          float64
 	MatchedQueries []string
+	RecallSources  []string
+	VectorScore    float64
+	BM25Score      float64
+	RRFScore       float64
 }
 
 type Request struct {
@@ -40,6 +50,10 @@ type Request struct {
 	QueryRewrite                bool
 	QueryRewriteMaxQueries      int
 	QueryRewriteIncludeOriginal bool
+	HybridEnabled               bool
+	BM25Enabled                 bool
+	BM25TopK                    int
+	RRFK                        int
 }
 
 type PreparedChat struct {
@@ -79,6 +93,10 @@ type RetrievalTrace struct {
 	RewriteEnabled    bool         `json:"rewrite_enabled"`
 	RewrittenQueries  []TraceQuery `json:"rewritten_queries"`
 	RewriteError      string       `json:"rewrite_error,omitempty"`
+	HybridEnabled     bool         `json:"hybrid_enabled"`
+	BM25Enabled       bool         `json:"bm25_enabled"`
+	RRFK              int          `json:"rrf_k"`
+	BM25Error         string       `json:"bm25_error,omitempty"`
 	Hits              []TraceHit   `json:"hits"`
 	UsedChunkCount    int          `json:"used_chunk_count"`
 	FilteredCount     int          `json:"filtered_count"`
@@ -95,6 +113,10 @@ type TraceHit struct {
 	ChunkIndex     int      `json:"chunk_index"`
 	Score          float64  `json:"score"`
 	MatchedQueries []string `json:"matched_queries,omitempty"`
+	RecallSources  []string `json:"recall_sources,omitempty"`
+	VectorScore    float64  `json:"vector_score,omitempty"`
+	BM25Score      float64  `json:"bm25_score,omitempty"`
+	RRFScore       float64  `json:"rrf_score,omitempty"`
 	Used           bool     `json:"used"`
 	Reason         string   `json:"reason,omitempty"`
 }
@@ -113,6 +135,9 @@ func NewTrace(req Request, rejectReason string) RetrievalTrace {
 		MaxContextTokens: req.MaxContextTokens,
 		StrictMode:       req.StrictMode,
 		RewriteEnabled:   req.QueryRewrite,
+		HybridEnabled:    req.HybridEnabled,
+		BM25Enabled:      req.BM25Enabled,
+		RRFK:             req.RRFK,
 		Hits:             []TraceHit{},
 		RewrittenQueries: []TraceQuery{},
 		RejectReason:     rejectReason,

@@ -27,6 +27,10 @@ rag:
   query_rewrite_model_temperature: 0.1
   query_rewrite_hyde_enabled: false
   query_rewrite_step_back_enabled: false
+  hybrid_enabled: true
+  bm25_enabled: true
+  bm25_top_k: 5
+  rrf_k: 60
 
 jwt:
   secret: "${JWT_SECRET}"
@@ -34,3 +38,6 @@ jwt:
 
 storage:
   document_dir: "storage/documents"
+
+search:
+  bluge_dir: "storage/bluge"

@@ -36,6 +36,8 @@ type ChatRequest struct {
 	MaxContextTokens int
 	StrictMode       *bool
 	QueryRewrite     *bool
+	Hybrid           *bool
+	BM25TopK         int
 }
 
 type ChatResponse struct {
@@ -271,6 +273,20 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	if queryRewriteMaxQueries > 5 {
 		queryRewriteMaxQueries = 5
 	}
+	hybridEnabled := s.cfg.RAG.HybridEnabled
+	if req.Hybrid != nil {
+		hybridEnabled = *req.Hybrid
+	}
+	bm25TopK := req.BM25TopK
+	if bm25TopK <= 0 {
+		bm25TopK = s.cfg.RAG.BM25TopK
+	}
+	if bm25TopK <= 0 {
+		bm25TopK = 5
+	}
+	if bm25TopK > 20 {
+		bm25TopK = 20
+	}
 
 	return rag.Request{
 		UserID:                      req.UserID,
@@ -283,6 +299,10 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		QueryRewrite:                queryRewrite,
 		QueryRewriteMaxQueries:      queryRewriteMaxQueries,
 		QueryRewriteIncludeOriginal: s.cfg.RAG.QueryRewriteIncludeOriginal,
+		HybridEnabled:               hybridEnabled,
+		BM25Enabled:                 s.cfg.RAG.BM25Enabled,
+		BM25TopK:                    bm25TopK,
+		RRFK:                        s.cfg.RAG.RRFK,
 	}, nil
 }
 

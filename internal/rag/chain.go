@@ -5,7 +5,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"OurAgent/internal/document"
@@ -144,46 +143,22 @@ func (c *RAGChain) queryRewriteNode(ctx context.Context, req Request) (*chainSta
 
 // retrieveNode 执行多query检索并合并结果
 func (c *RAGChain) retrieveNode(ctx context.Context, state *chainState) (*chainState, error) {
-	// 使用子chunkID作为去重键合并多路检索结果
-	merged := make(map[uint64]RetrievedChunk)
-	for _, query := range state.queries {
-		// 每个query独立检索一次Qdrant
-		results, err := c.retriever.Retrieve(ctx, RetrieveRequest{
-			UserID:          state.req.UserID,
-			KnowledgeBaseID: state.req.KnowledgeBaseID,
-			Query:           query.Query,
-			TopK:            state.req.TopK,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range results {
-			// 同一个子chunk被多个query命中时只保留一条
-			childID := item.MatchedChunk.ID
-			item.MatchedQueries = appendQuery(item.MatchedQueries, query.Query)
-			existing, ok := merged[childID]
-			if !ok || item.Score > existing.Score {
-				// 新结果分数更高时替换旧结果，并保留历史命中query
-				if ok {
-					item.MatchedQueries = appendQueries(item.MatchedQueries, existing.MatchedQueries)
-				}
-				merged[childID] = item
-				continue
-			}
-			// 旧结果分数更高时只补充当前命中query
-			existing.MatchedQueries = appendQuery(existing.MatchedQueries, query.Query)
-			merged[childID] = existing
-		}
-	}
-
-	// map转为列表后按最终相似度降序排序
-	state.results = make([]RetrievedChunk, 0, len(merged))
-	for _, item := range merged {
-		state.results = append(state.results, item)
-	}
-	sort.SliceStable(state.results, func(i, j int) bool {
-		return state.results[i].Score > state.results[j].Score
+	results, err := c.retriever.Retrieve(ctx, RetrieveRequest{
+		UserID:          state.req.UserID,
+		KnowledgeBaseID: state.req.KnowledgeBaseID,
+		Query:           state.req.Question,
+		Queries:         state.queries,
+		TopK:            state.req.TopK,
+		BM25TopK:        state.req.BM25TopK,
+		HybridEnabled:   state.req.HybridEnabled,
+		BM25Enabled:     state.req.BM25Enabled,
+		RRFK:            state.req.RRFK,
+		Trace:           &state.trace,
 	})
+	if err != nil {
+		return nil, err
+	}
+	state.results = results
 	return state, nil
 }
 
@@ -211,6 +186,10 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 			ChunkIndex:     item.MatchedChunk.ChunkIndex,
 			Score:          item.Score,
 			MatchedQueries: item.MatchedQueries,
+			RecallSources:  item.RecallSources,
+			VectorScore:    item.VectorScore,
+			BM25Score:      item.BM25Score,
+			RRFScore:       item.RRFScore,
 		}
 
 		// 过滤低于相似度阈值的切片

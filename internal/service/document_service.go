@@ -14,6 +14,7 @@ import (
 	"OurAgent/internal/document"
 	"OurAgent/internal/model"
 	"OurAgent/internal/repository"
+	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/vectorstore"
 
 	pkgerrors "github.com/pkg/errors"
@@ -25,6 +26,7 @@ type DocumentService struct {
 	kbs     *repository.KnowledgeBaseRepository
 	indexer *document.Indexer
 	qdrant  *vectorstore.QdrantClient
+	keyword appsearch.KeywordStore
 	cfg     *config.Config
 }
 
@@ -35,8 +37,8 @@ type UploadDocumentInput struct {
 	Save   func(file *multipart.FileHeader, dst string) error
 }
 
-func NewDocumentService(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, qdrant *vectorstore.QdrantClient, cfg *config.Config) *DocumentService {
-	return &DocumentService{docs: docs, chunks: chunks, kbs: kbs, indexer: indexer, qdrant: qdrant, cfg: cfg}
+func NewDocumentService(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, cfg *config.Config) *DocumentService {
+	return &DocumentService{docs: docs, chunks: chunks, kbs: kbs, indexer: indexer, qdrant: qdrant, keyword: keyword, cfg: cfg}
 }
 
 // Upload 保存上传文档并触发异步索引
@@ -120,6 +122,11 @@ func (s *DocumentService) Delete(ctx context.Context, userID, docID uint64) erro
 	}
 	if err := s.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
 		return pkgerrors.WithMessage(err, "删除向量索引失败")
+	}
+	if s.keyword != nil {
+		if err := s.keyword.DeleteByDocumentID(ctx, doc.UserID, doc.ID); err != nil {
+			return pkgerrors.WithMessage(err, "删除关键词索引失败")
+		}
 	}
 	if err := s.chunks.DeleteByDocumentID(userID, docID); err != nil {
 		return pkgerrors.WithMessage(err, "删除文档切片失败")

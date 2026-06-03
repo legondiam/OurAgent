@@ -9,6 +9,7 @@ import (
 
 	"OurAgent/internal/config"
 	"OurAgent/internal/model"
+	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/vectorstore"
 
 	"github.com/cloudwego/eino/components/embedding"
@@ -18,12 +19,13 @@ import (
 type Indexer struct {
 	db       *gorm.DB
 	qdrant   *vectorstore.QdrantClient
+	keyword  appsearch.KeywordStore
 	embedder embedding.Embedder
 	cfg      *config.Config
 }
 
-func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, embedder embedding.Embedder, cfg *config.Config) *Indexer {
-	return &Indexer{db: db, qdrant: qdrant, embedder: embedder, cfg: cfg}
+func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, embedder embedding.Embedder, cfg *config.Config) *Indexer {
+	return &Indexer{db: db, qdrant: qdrant, keyword: keyword, embedder: embedder, cfg: cfg}
 }
 
 // IndexAsync 异步执行文档索引
@@ -49,6 +51,12 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 	if err := i.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
 		i.fail(doc.ID, fmt.Sprintf("删除旧向量失败: %v", err))
 		return err
+	}
+	if i.keyword != nil {
+		if err := i.keyword.DeleteByDocumentID(ctx, doc.UserID, doc.ID); err != nil {
+			i.fail(doc.ID, fmt.Sprintf("删除旧关键词索引失败: %v", err))
+			return err
+		}
 	}
 
 	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentChildChunk{}).Error; err != nil {
@@ -140,6 +148,12 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 			if err := i.db.Model(&childChunk).Update("vector_id", childChunk.VectorID).Error; err != nil {
 				i.fail(doc.ID, fmt.Sprintf("更新子 chunk vector_id 失败: %v", err))
 				return err
+			}
+			if i.keyword != nil {
+				if err := i.keyword.IndexChild(ctx, childChunk); err != nil {
+					i.fail(doc.ID, fmt.Sprintf("写入关键词索引失败: %v", err))
+					return err
+				}
 			}
 			childCount++
 		}

@@ -12,6 +12,7 @@ import (
 	"OurAgent/internal/rag"
 	"OurAgent/internal/repository"
 	"OurAgent/internal/router"
+	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/service"
 	"OurAgent/internal/vectorstore"
 	"OurAgent/pkg/logger"
@@ -37,6 +38,12 @@ func main() {
 	}
 
 	qdrant := vectorstore.NewQdrantClient(cfg.Qdrant.URL, cfg.Qdrant.Collection)
+	keywordStore, err := appsearch.NewBlugeStore(cfg.Search.BlugeDir)
+	if err != nil {
+		logger.Logger.Fatal("初始化Bluge关键词索引失败", zap.Error(err))
+	}
+	defer keywordStore.Close()
+
 	embedder, err := einoapp.NewEmbedding(context.Background(), cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
 	if err != nil {
 		logger.Logger.Fatal("初始化 Eino Embedding 失败", zap.Error(err))
@@ -55,13 +62,15 @@ func main() {
 	documentRepo := repository.NewDocumentRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
 	chatLogRepo := repository.NewChatLogRepository(db)
-	ragRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
+	vectorRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
+	bm25Retriever := rag.NewBM25Retriever(documentRepo, chunkRepo, keywordStore)
+	ragRetriever := rag.NewHybridRetriever(vectorRetriever, bm25Retriever)
 	queryRewriter := rag.NewLLMQueryRewriter(rewriteChatModel)
 
-	indexer := document.NewIndexer(db, qdrant, embedder, cfg)
+	indexer := document.NewIndexer(db, qdrant, keywordStore, embedder, cfg)
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
-	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, cfg)
+	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, keywordStore, cfg)
 	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, chatModel, cfg)
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
