@@ -8,6 +8,13 @@ qdrant:
   url: "http://localhost:6333"
   collection: "our_agent_chunks"
 
+minio:
+  endpoint: "localhost:9000"
+  access_key: "${MINIO_ACCESS_KEY}"
+  secret_key: "${MINIO_SECRET_KEY}"
+  bucket: "our-agent-documents"
+  use_ssl: false
+
 llm:
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   api_key: "${OPENAI_API_KEY}"
@@ -35,9 +42,6 @@ rag:
 jwt:
   secret: "${JWT_SECRET}"
   expires_hours: 168
-
-storage:
-  document_dir: "storage/documents"
 
 search:
   bluge_dir: "storage/bluge"

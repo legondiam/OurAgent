@@ -30,7 +30,11 @@ type Document struct {
 	UserID          uint64    `gorm:"index;not null" json:"user_id"`
 	Filename        string    `gorm:"size:255;not null" json:"filename"`
 	FileType        string    `gorm:"size:32;not null" json:"file_type"`
-	FilePath        string    `gorm:"size:1024;not null" json:"file_path"`
+	FilePath        string    `gorm:"size:1024" json:"file_path"`
+	BucketName      string    `gorm:"size:128" json:"bucket_name"`
+	ObjectKey       string    `gorm:"size:1024;index" json:"object_key"`
+	FileSize        int64     `json:"file_size"`
+	ContentType     string    `gorm:"size:128" json:"content_type"`
 	Status          string    `gorm:"size:32;index;not null" json:"status"`
 	ErrorMessage    string    `gorm:"type:text" json:"error_message"`
 	ChunkCount      int       `json:"chunk_count"`

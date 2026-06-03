@@ -10,6 +10,7 @@ import (
 	"OurAgent/internal/config"
 	"OurAgent/internal/model"
 	appsearch "OurAgent/internal/search"
+	"OurAgent/internal/storage"
 	"OurAgent/internal/vectorstore"
 
 	"github.com/cloudwego/eino/components/embedding"
@@ -20,12 +21,13 @@ type Indexer struct {
 	db       *gorm.DB
 	qdrant   *vectorstore.QdrantClient
 	keyword  appsearch.KeywordStore
+	minio    *storage.MinIOClient
 	embedder embedding.Embedder
 	cfg      *config.Config
 }
 
-func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, embedder embedding.Embedder, cfg *config.Config) *Indexer {
-	return &Indexer{db: db, qdrant: qdrant, keyword: keyword, embedder: embedder, cfg: cfg}
+func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, minio *storage.MinIOClient, embedder embedding.Embedder, cfg *config.Config) *Indexer {
+	return &Indexer{db: db, qdrant: qdrant, keyword: keyword, minio: minio, embedder: embedder, cfg: cfg}
 }
 
 // IndexAsync 异步执行文档索引
@@ -68,7 +70,14 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 
-	text, err := ParseFile(doc.FilePath)
+	reader, err := i.minio.GetObject(ctx, doc.ObjectKey)
+	if err != nil {
+		i.fail(doc.ID, fmt.Sprintf("读取原始文档失败: %v", err))
+		return err
+	}
+	defer reader.Close()
+
+	text, err := ParseReader(doc.Filename, reader)
 	if err != nil {
 		i.fail(doc.ID, fmt.Sprintf("解析文档失败: %v", err))
 		return err

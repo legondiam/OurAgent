@@ -10,14 +10,14 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `yaml:"server" mapstructure:"server"`
-	MySQL   MySQLConfig   `yaml:"mysql" mapstructure:"mysql"`
-	Qdrant  QdrantConfig  `yaml:"qdrant" mapstructure:"qdrant"`
-	LLM     LLMConfig     `yaml:"llm" mapstructure:"llm"`
-	RAG     RAGConfig     `yaml:"rag" mapstructure:"rag"`
-	JWT     JWTConfig     `yaml:"jwt" mapstructure:"jwt"`
-	Storage StorageConfig `yaml:"storage" mapstructure:"storage"`
-	Search  SearchConfig  `yaml:"search" mapstructure:"search"`
+	Server ServerConfig `yaml:"server" mapstructure:"server"`
+	MySQL  MySQLConfig  `yaml:"mysql" mapstructure:"mysql"`
+	Qdrant QdrantConfig `yaml:"qdrant" mapstructure:"qdrant"`
+	MinIO  MinIOConfig  `yaml:"minio" mapstructure:"minio"`
+	LLM    LLMConfig    `yaml:"llm" mapstructure:"llm"`
+	RAG    RAGConfig    `yaml:"rag" mapstructure:"rag"`
+	JWT    JWTConfig    `yaml:"jwt" mapstructure:"jwt"`
+	Search SearchConfig `yaml:"search" mapstructure:"search"`
 }
 
 type ServerConfig struct {
@@ -31,6 +31,14 @@ type MySQLConfig struct {
 type QdrantConfig struct {
 	URL        string `yaml:"url" mapstructure:"url"`
 	Collection string `yaml:"collection" mapstructure:"collection"`
+}
+
+type MinIOConfig struct {
+	Endpoint  string `yaml:"endpoint" mapstructure:"endpoint"`
+	AccessKey string `yaml:"access_key" mapstructure:"access_key"`
+	SecretKey string `yaml:"secret_key" mapstructure:"secret_key"`
+	Bucket    string `yaml:"bucket" mapstructure:"bucket"`
+	UseSSL    bool   `yaml:"use_ssl" mapstructure:"use_ssl"`
 }
 
 type LLMConfig struct {
@@ -62,10 +70,6 @@ type RAGConfig struct {
 type JWTConfig struct {
 	Secret       string `yaml:"secret" mapstructure:"secret"`
 	ExpiresHours int    `yaml:"expires_hours" mapstructure:"expires_hours"`
-}
-
-type StorageConfig struct {
-	DocumentDir string `yaml:"document_dir" mapstructure:"document_dir"`
 }
 
 type SearchConfig struct {
@@ -119,7 +123,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.bm25_top_k", 5)
 	v.SetDefault("rag.rrf_k", 60)
 	v.SetDefault("jwt.expires_hours", 168)
-	v.SetDefault("storage.document_dir", "storage/documents")
 	v.SetDefault("search.bluge_dir", "storage/bluge")
 }
 
@@ -127,6 +130,11 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("mysql.dsn", "MYSQL_DSN")
 	_ = v.BindEnv("qdrant.url", "QDRANT_URL")
 	_ = v.BindEnv("qdrant.collection", "QDRANT_COLLECTION")
+	_ = v.BindEnv("minio.endpoint", "MINIO_ENDPOINT")
+	_ = v.BindEnv("minio.access_key", "MINIO_ACCESS_KEY")
+	_ = v.BindEnv("minio.secret_key", "MINIO_SECRET_KEY")
+	_ = v.BindEnv("minio.bucket", "MINIO_BUCKET")
+	_ = v.BindEnv("minio.use_ssl", "MINIO_USE_SSL")
 	_ = v.BindEnv("llm.base_url", "LLM_BASE_URL")
 	_ = v.BindEnv("llm.api_key", "OPENAI_API_KEY")
 	_ = v.BindEnv("llm.chat_model", "CHAT_MODEL")
@@ -178,11 +186,11 @@ func applyDefaults(cfg *Config) {
 	if cfg.JWT.ExpiresHours == 0 {
 		cfg.JWT.ExpiresHours = 168
 	}
-	if cfg.Storage.DocumentDir == "" {
-		cfg.Storage.DocumentDir = "storage/documents"
-	}
 	if cfg.Search.BlugeDir == "" {
 		cfg.Search.BlugeDir = "storage/bluge"
+	}
+	if cfg.MinIO.Bucket == "" {
+		cfg.MinIO.Bucket = "our-agent-documents"
 	}
 }
 
@@ -190,11 +198,14 @@ func expandEnv(cfg *Config) {
 	cfg.MySQL.DSN = os.ExpandEnv(cfg.MySQL.DSN)
 	cfg.Qdrant.URL = os.ExpandEnv(cfg.Qdrant.URL)
 	cfg.Qdrant.Collection = os.ExpandEnv(cfg.Qdrant.Collection)
+	cfg.MinIO.Endpoint = os.ExpandEnv(cfg.MinIO.Endpoint)
+	cfg.MinIO.AccessKey = os.ExpandEnv(cfg.MinIO.AccessKey)
+	cfg.MinIO.SecretKey = os.ExpandEnv(cfg.MinIO.SecretKey)
+	cfg.MinIO.Bucket = os.ExpandEnv(cfg.MinIO.Bucket)
 	cfg.LLM.BaseURL = os.ExpandEnv(cfg.LLM.BaseURL)
 	cfg.LLM.APIKey = os.ExpandEnv(cfg.LLM.APIKey)
 	cfg.LLM.ChatModel = os.ExpandEnv(cfg.LLM.ChatModel)
 	cfg.LLM.EmbeddingModel = os.ExpandEnv(cfg.LLM.EmbeddingModel)
 	cfg.JWT.Secret = os.ExpandEnv(cfg.JWT.Secret)
-	cfg.Storage.DocumentDir = os.ExpandEnv(cfg.Storage.DocumentDir)
 	cfg.Search.BlugeDir = os.ExpandEnv(cfg.Search.BlugeDir)
 }

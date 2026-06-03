@@ -37,10 +37,10 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 	}
 
 	doc, err := h.service.Upload(service.UploadDocumentInput{
-		UserID: userID,
-		KBID:   kbID,
-		File:   file,
-		Save:   c.SaveUploadedFile,
+		Context: c.Request.Context(),
+		UserID:  userID,
+		KBID:    kbID,
+		File:    file,
 	})
 	if err != nil {
 		handleDocumentError(c, err, "上传文档失败")

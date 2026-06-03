@@ -2,10 +2,8 @@ package service
 
 import (
 	"context"
-	stderrors "errors"
 	"fmt"
 	"mime/multipart"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"OurAgent/internal/model"
 	"OurAgent/internal/repository"
 	appsearch "OurAgent/internal/search"
+	"OurAgent/internal/storage"
 	"OurAgent/internal/vectorstore"
 
 	pkgerrors "github.com/pkg/errors"
@@ -27,18 +26,19 @@ type DocumentService struct {
 	indexer *document.Indexer
 	qdrant  *vectorstore.QdrantClient
 	keyword appsearch.KeywordStore
+	minio   *storage.MinIOClient
 	cfg     *config.Config
 }
 
 type UploadDocumentInput struct {
-	UserID uint64
-	KBID   uint64
-	File   *multipart.FileHeader
-	Save   func(file *multipart.FileHeader, dst string) error
+	Context context.Context
+	UserID  uint64
+	KBID    uint64
+	File    *multipart.FileHeader
 }
 
-func NewDocumentService(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, cfg *config.Config) *DocumentService {
-	return &DocumentService{docs: docs, chunks: chunks, kbs: kbs, indexer: indexer, qdrant: qdrant, keyword: keyword, cfg: cfg}
+func NewDocumentService(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, minio *storage.MinIOClient, cfg *config.Config) *DocumentService {
+	return &DocumentService{docs: docs, chunks: chunks, kbs: kbs, indexer: indexer, qdrant: qdrant, keyword: keyword, minio: minio, cfg: cfg}
 }
 
 // Upload 保存上传文档并触发异步索引
@@ -59,14 +59,23 @@ func (s *DocumentService) Upload(input UploadDocumentInput) (*model.Document, er
 		return nil, pkgerrors.WithStack(ErrUnsupportedFileType)
 	}
 
-	if err := os.MkdirAll(s.cfg.Storage.DocumentDir, 0755); err != nil {
-		return nil, pkgerrors.WithMessage(err, "创建存储目录失败")
-	}
 	safeName := filepath.Base(input.File.Filename)
-	storedName := fmt.Sprintf("%d_%d_%s", input.UserID, time.Now().UnixNano(), safeName)
-	dst := filepath.Join(s.cfg.Storage.DocumentDir, storedName)
-	if err := input.Save(input.File, dst); err != nil {
-		return nil, pkgerrors.WithMessage(err, "保存文件失败")
+	objectKey := fmt.Sprintf("users/%d/knowledge-bases/%d/%d_%s", input.UserID, input.KBID, time.Now().UnixNano(), safeName)
+	file, err := input.File.Open()
+	if err != nil {
+		return nil, pkgerrors.WithMessage(err, "打开上传文件失败")
+	}
+	defer file.Close()
+	contentType := input.File.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	ctx := input.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.minio.Upload(ctx, objectKey, file, input.File.Size, contentType); err != nil {
+		return nil, err
 	}
 
 	doc := &model.Document{
@@ -74,7 +83,11 @@ func (s *DocumentService) Upload(input UploadDocumentInput) (*model.Document, er
 		UserID:          input.UserID,
 		Filename:        input.File.Filename,
 		FileType:        ext,
-		FilePath:        dst,
+		FilePath:        objectKey,
+		BucketName:      s.minio.Bucket(),
+		ObjectKey:       objectKey,
+		FileSize:        input.File.Size,
+		ContentType:     contentType,
 		Status:          "pending",
 	}
 	if err := s.docs.Create(doc); err != nil {
@@ -131,11 +144,11 @@ func (s *DocumentService) Delete(ctx context.Context, userID, docID uint64) erro
 	if err := s.chunks.DeleteByDocumentID(userID, docID); err != nil {
 		return pkgerrors.WithMessage(err, "删除文档切片失败")
 	}
+	if err := s.minio.DeleteObject(ctx, doc.ObjectKey); err != nil {
+		return err
+	}
 	if err := s.docs.DeleteByIDAndUserID(docID, userID); err != nil {
 		return pkgerrors.WithMessage(err, "删除文档记录失败")
-	}
-	if err := os.Remove(doc.FilePath); err != nil && !stderrors.Is(err, os.ErrNotExist) {
-		return pkgerrors.WithMessage(err, "删除本地文件失败")
 	}
 	return nil
 }

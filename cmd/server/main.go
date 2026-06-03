@@ -14,6 +14,7 @@ import (
 	"OurAgent/internal/router"
 	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/service"
+	"OurAgent/internal/storage"
 	"OurAgent/internal/vectorstore"
 	"OurAgent/pkg/logger"
 
@@ -38,6 +39,10 @@ func main() {
 	}
 
 	qdrant := vectorstore.NewQdrantClient(cfg.Qdrant.URL, cfg.Qdrant.Collection)
+	minioClient, err := storage.NewMinIOClient(context.Background(), cfg.MinIO)
+	if err != nil {
+		logger.Logger.Fatal("初始化MinIO失败", zap.Error(err))
+	}
 	keywordStore, err := appsearch.NewBlugeStore(cfg.Search.BlugeDir)
 	if err != nil {
 		logger.Logger.Fatal("初始化Bluge关键词索引失败", zap.Error(err))
@@ -67,10 +72,10 @@ func main() {
 	ragRetriever := rag.NewHybridRetriever(vectorRetriever, bm25Retriever)
 	queryRewriter := rag.NewLLMQueryRewriter(rewriteChatModel)
 
-	indexer := document.NewIndexer(db, qdrant, keywordStore, embedder, cfg)
+	indexer := document.NewIndexer(db, qdrant, keywordStore, minioClient, embedder, cfg)
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
-	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, keywordStore, cfg)
+	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, keywordStore, minioClient, cfg)
 	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, chatModel, cfg)
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))

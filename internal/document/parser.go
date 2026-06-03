@@ -13,33 +13,44 @@ import (
 
 // ParseFile 按文件类型解析文档文本
 func ParseFile(path string) (string, error) {
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	return ParseReader(filepath.Base(path), file)
+}
+
+// ParseReader 按文件类型从数据流解析文档文本
+func ParseReader(filename string, reader io.Reader) (string, error) {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
 	switch ext {
 	case "txt", "md":
-		raw, err := os.ReadFile(path)
+		raw, err := io.ReadAll(reader)
 		if err != nil {
 			return "", err
 		}
 		return string(raw), nil
 	case "pdf":
-		return parsePDF(path)
+		return parsePDFReader(reader)
 	default:
 		return "", errors.New("文件类型不支持")
 	}
 }
 
-func parsePDF(path string) (string, error) {
-	file, reader, err := pdf.Open(path)
+func parsePDFReader(reader io.Reader) (string, error) {
+	raw, err := io.ReadAll(reader)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
-
-	textReader, err := reader.GetPlainText()
+	pdfReader, err := pdf.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		return "", err
 	}
-
+	textReader, err := pdfReader.GetPlainText()
+	if err != nil {
+		return "", err
+	}
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, textReader); err != nil {
 		return "", err
