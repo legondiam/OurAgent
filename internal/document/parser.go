@@ -2,12 +2,15 @@ package document
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	einoparser "github.com/cloudwego/eino/components/document/parser"
+	"github.com/cloudwego/eino/schema"
 	"github.com/ledongthuc/pdf"
 )
 
@@ -18,24 +21,44 @@ func ParseFile(path string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	return ParseReader(filepath.Base(path), file)
+	return ParseReader(context.Background(), filepath.Base(path), file)
 }
 
-// ParseReader 按文件类型从数据流解析文档文本
-func ParseReader(filename string, reader io.Reader) (string, error) {
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
-	switch ext {
-	case "txt", "md":
-		raw, err := io.ReadAll(reader)
-		if err != nil {
-			return "", err
-		}
-		return string(raw), nil
-	case "pdf":
-		return parsePDFReader(reader)
-	default:
-		return "", errors.New("文件类型不支持")
+// ParseReader 使用Eino Parser组件从数据流解析文档文本
+func ParseReader(ctx context.Context, filename string, reader io.Reader) (string, error) {
+	parser, err := einoparser.NewExtParser(ctx, &einoparser.ExtParserConfig{
+		Parsers: map[string]einoparser.Parser{
+			".txt": einoparser.TextParser{},
+			".md":  einoparser.TextParser{},
+			".pdf": pdfParser{},
+		},
+		FallbackParser: unsupportedParser{},
+	})
+	if err != nil {
+		return "", err
 	}
+
+	docs, err := parser.Parse(ctx, reader, einoparser.WithURI(filename))
+	if err != nil {
+		return "", err
+	}
+	return mergeDocuments(docs), nil
+}
+
+type pdfParser struct{}
+
+func (p pdfParser) Parse(_ context.Context, reader io.Reader, _ ...einoparser.Option) ([]*schema.Document, error) {
+	text, err := parsePDFReader(reader)
+	if err != nil {
+		return nil, err
+	}
+	return []*schema.Document{{Content: text}}, nil
+}
+
+type unsupportedParser struct{}
+
+func (p unsupportedParser) Parse(_ context.Context, _ io.Reader, _ ...einoparser.Option) ([]*schema.Document, error) {
+	return nil, errors.New("文件类型不支持")
 }
 
 func parsePDFReader(reader io.Reader) (string, error) {
@@ -56,6 +79,17 @@ func parsePDFReader(reader io.Reader) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+func mergeDocuments(docs []*schema.Document) string {
+	contents := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		if doc == nil || strings.TrimSpace(doc.Content) == "" {
+			continue
+		}
+		contents = append(contents, doc.Content)
+	}
+	return strings.Join(contents, "\n")
 }
 
 // NormalizeText 规范化文档文本格式

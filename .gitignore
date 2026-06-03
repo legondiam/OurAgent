@@ -8,4 +8,6 @@ logs/
 .vscode/
 *.md
 !README.md
+!docs/
+!docs/**/*.md
 *.tex

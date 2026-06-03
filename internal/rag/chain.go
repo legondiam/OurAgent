@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"OurAgent/internal/document"
@@ -23,13 +24,15 @@ const systemPromptTemplate = `你是企业知识库问答助手。
 回答应简洁、清晰，并尽量按条目组织。`
 
 type RAGChain struct {
-	retriever Retriever
-	rewriter  QueryRewriter
-	chat      einomodel.BaseChatModel
-	modelName string
-	template  *einoprompt.DefaultChatTemplate
-	invoke    compose.Runnable[Request, *PreparedChat]
-	stream    compose.Runnable[Request, StreamChunk]
+	retriever   Retriever
+	rewriter    QueryRewriter
+	reranker    Reranker
+	chat        einomodel.BaseChatModel
+	modelName   string
+	rerankModel string
+	template    *einoprompt.DefaultChatTemplate
+	invoke      compose.Runnable[Request, *PreparedChat]
+	stream      compose.Runnable[Request, StreamChunk]
 }
 
 type chainState struct {
@@ -46,16 +49,21 @@ type chainState struct {
 	outputTokens  int
 }
 
-func NewRAGChain(ctx context.Context, retriever Retriever, rewriter QueryRewriter, chat einomodel.BaseChatModel, modelName string) (*RAGChain, error) {
+func NewRAGChain(ctx context.Context, retriever Retriever, rewriter QueryRewriter, reranker Reranker, chat einomodel.BaseChatModel, modelName, rerankModel string) (*RAGChain, error) {
 	if rewriter == nil {
 		rewriter = NewFallbackQueryRewriter()
 	}
+	if reranker == nil {
+		reranker = NewFallbackReranker()
+	}
 	// chain容器
 	chain := &RAGChain{
-		retriever: retriever,
-		rewriter:  rewriter,
-		chat:      chat,
-		modelName: modelName,
+		retriever:   retriever,
+		rewriter:    rewriter,
+		reranker:    reranker,
+		chat:        chat,
+		modelName:   modelName,
+		rerankModel: rerankModel,
 		template: einoprompt.FromMessages(
 			schema.FString,
 			schema.SystemMessage(systemPromptTemplate),
@@ -67,6 +75,7 @@ func NewRAGChain(ctx context.Context, retriever Retriever, rewriter QueryRewrite
 	invoke, err := compose.NewChain[Request, *PreparedChat]().
 		AppendLambda(compose.InvokableLambda(chain.queryRewriteNode, compose.WithLambdaType("QueryRewriteNode")), compose.WithNodeName("Query Rewrite Node")).
 		AppendLambda(compose.InvokableLambda(chain.retrieveNode, compose.WithLambdaType("RetrieverNode")), compose.WithNodeName("Retriever Node")).
+		AppendLambda(compose.InvokableLambda(chain.rerankNode, compose.WithLambdaType("RerankNode")), compose.WithNodeName("Rerank Node")).
 		AppendLambda(compose.InvokableLambda(chain.contextBuilderNode, compose.WithLambdaType("ContextBuilderNode")), compose.WithNodeName("Context Builder Node")).
 		AppendLambda(compose.InvokableLambda(chain.promptTemplateNode, compose.WithLambdaType("PromptTemplateNode")), compose.WithNodeName("Prompt Template Node")).
 		AppendLambda(compose.InvokableLambda(chain.chatModelNode, compose.WithLambdaType("ChatModelNode")), compose.WithNodeName("ChatModel Node")).
@@ -79,6 +88,7 @@ func NewRAGChain(ctx context.Context, retriever Retriever, rewriter QueryRewrite
 	stream, err := compose.NewChain[Request, StreamChunk]().
 		AppendLambda(compose.InvokableLambda(chain.queryRewriteNode, compose.WithLambdaType("QueryRewriteNode")), compose.WithNodeName("Query Rewrite Node")).
 		AppendLambda(compose.InvokableLambda(chain.retrieveNode, compose.WithLambdaType("RetrieverNode")), compose.WithNodeName("Retriever Node")).
+		AppendLambda(compose.InvokableLambda(chain.rerankNode, compose.WithLambdaType("RerankNode")), compose.WithNodeName("Rerank Node")).
 		AppendLambda(compose.InvokableLambda(chain.contextBuilderNode, compose.WithLambdaType("ContextBuilderNode")), compose.WithNodeName("Context Builder Node")).
 		AppendLambda(compose.InvokableLambda(chain.promptTemplateNode, compose.WithLambdaType("PromptTemplateNode")), compose.WithNodeName("Prompt Template Node")).
 		AppendLambda(compose.StreamableLambda(chain.streamChatModelNode, compose.WithLambdaType("StreamChatModelNode")), compose.WithNodeName("Stream ChatModel Node")).
@@ -162,6 +172,55 @@ func (c *RAGChain) retrieveNode(ctx context.Context, state *chainState) (*chainS
 	return state, nil
 }
 
+// rerankNode 对召回候选切片进行精排
+func (c *RAGChain) rerankNode(ctx context.Context, state *chainState) (*chainState, error) {
+	// 未开启精排或没有召回结果时直接沿用原结果
+	if !state.req.Rerank || len(state.results) == 0 {
+		return state, nil
+	}
+
+	// 限制送入精排模型的候选数量和最终保留数量
+	candidateLimit := state.req.RerankCandidateLimit
+	if candidateLimit <= 0 || candidateLimit > len(state.results) {
+		candidateLimit = len(state.results)
+	}
+	topN := state.req.RerankTopN
+	if topN <= 0 || topN > candidateLimit {
+		topN = candidateLimit
+	}
+	state.trace.RerankEnabled = true
+	state.trace.RerankModel = c.rerankModel
+	state.trace.RerankCandidateCount = candidateLimit
+
+	// 记录精排前排名，并组装模型需要的候选文本
+	items := make([]RerankItem, 0, candidateLimit)
+	for i := 0; i < candidateLimit; i++ {
+		state.results[i].BeforeRerankRank = i + 1
+		items = append(items, RerankItem{
+			Index:         i,
+			ChildChunkID:  state.results[i].MatchedChunk.ID,
+			ParentChunkID: state.results[i].Chunk.ID,
+			Text:          buildRerankText(state.results[i]),
+		})
+	}
+
+	// 调用精排模型判断问题和候选切片的相关性
+	result, err := c.reranker.Rerank(ctx, RerankRequest{
+		Query: state.req.Question,
+		Items: items,
+		TopN:  topN,
+	})
+	if err != nil {
+		state.trace.RerankError = err.Error()
+		return state, nil
+	}
+
+	// 用精排结果重排候选，后续上下文构建只读取重排后的结果
+	reranked := applyRerankResult(state.results[:candidateLimit], result, topN)
+	state.results = reranked
+	return state, nil
+}
+
 // contextBuilderNode 构建上下文和检索trace
 func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*chainState, error) {
 	var builder strings.Builder
@@ -178,18 +237,21 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 
 		// 先记录命中切片的基础trace信息
 		hit := TraceHit{
-			ChunkID:        item.MatchedChunk.ID,
-			DocumentID:     item.Chunk.DocumentID,
-			DocumentName:   item.Document.Filename,
-			SectionPath:    item.MatchedChunk.SectionPath,
-			ParentChunkID:  item.Chunk.ID,
-			ChunkIndex:     item.MatchedChunk.ChunkIndex,
-			Score:          item.Score,
-			MatchedQueries: item.MatchedQueries,
-			RecallSources:  item.RecallSources,
-			VectorScore:    item.VectorScore,
-			BM25Score:      item.BM25Score,
-			RRFScore:       item.RRFScore,
+			ChunkID:          item.MatchedChunk.ID,
+			DocumentID:       item.Chunk.DocumentID,
+			DocumentName:     item.Document.Filename,
+			SectionPath:      item.MatchedChunk.SectionPath,
+			ParentChunkID:    item.Chunk.ID,
+			ChunkIndex:       item.MatchedChunk.ChunkIndex,
+			Score:            item.Score,
+			MatchedQueries:   item.MatchedQueries,
+			RecallSources:    item.RecallSources,
+			VectorScore:      item.VectorScore,
+			BM25Score:        item.BM25Score,
+			RRFScore:         item.RRFScore,
+			RerankScore:      item.RerankScore,
+			RerankRank:       item.RerankRank,
+			BeforeRerankRank: item.BeforeRerankRank,
 		}
 
 		// 过滤低于相似度阈值的切片
@@ -380,6 +442,57 @@ func buildSourceBlock(index int, item RetrievedChunk) string {
 		return fmt.Sprintf("[来源 %d: %s / %s / chunk %d]\n%s\n\n", index, item.Document.Filename, item.Chunk.SectionPath, item.Chunk.ChunkIndex, item.Chunk.Content)
 	}
 	return fmt.Sprintf("[来源 %d: %s / chunk %d]\n%s\n\n", index, item.Document.Filename, item.Chunk.ChunkIndex, item.Chunk.Content)
+}
+
+func buildRerankText(item RetrievedChunk) string {
+	var builder strings.Builder
+	if strings.TrimSpace(item.MatchedChunk.SectionPath) != "" {
+		builder.WriteString("章节：")
+		builder.WriteString(item.MatchedChunk.SectionPath)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("内容：")
+	builder.WriteString(item.MatchedChunk.Content)
+	return builder.String()
+}
+
+func applyRerankResult(candidates []RetrievedChunk, result *RerankResult, topN int) []RetrievedChunk {
+	if result == nil || len(result.Items) == 0 {
+		return candidates
+	}
+
+	// 按模型返回的index找到原候选，并写入精排分数
+	reranked := make([]RetrievedChunk, 0, len(result.Items))
+	seen := make(map[int]struct{}, len(result.Items))
+	for _, resultItem := range result.Items {
+		if resultItem.Index < 0 || resultItem.Index >= len(candidates) {
+			continue
+		}
+		if _, ok := seen[resultItem.Index]; ok {
+			continue
+		}
+		seen[resultItem.Index] = struct{}{}
+		item := candidates[resultItem.Index]
+		item.RerankScore = resultItem.Score
+		item.Score = resultItem.Score
+		reranked = append(reranked, item)
+	}
+
+	// 按精排分数重新排序，分数越高越靠前
+	sort.SliceStable(reranked, func(i, j int) bool {
+		return reranked[i].RerankScore > reranked[j].RerankScore
+	})
+
+	// 只保留精排后的前topN个结果进入后续上下文构建
+	if topN > 0 && topN < len(reranked) {
+		reranked = reranked[:topN]
+	}
+
+	// 记录精排后的最终排名，便于trace排查
+	for i := range reranked {
+		reranked[i].RerankRank = i + 1
+	}
+	return reranked
 }
 
 func preview(text string, max int) string {

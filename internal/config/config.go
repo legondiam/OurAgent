@@ -16,6 +16,7 @@ type Config struct {
 	MinIO  MinIOConfig  `yaml:"minio" mapstructure:"minio"`
 	LLM    LLMConfig    `yaml:"llm" mapstructure:"llm"`
 	RAG    RAGConfig    `yaml:"rag" mapstructure:"rag"`
+	Rerank RerankConfig `yaml:"rerank" mapstructure:"rerank"`
 	JWT    JWTConfig    `yaml:"jwt" mapstructure:"jwt"`
 	Search SearchConfig `yaml:"search" mapstructure:"search"`
 }
@@ -65,6 +66,17 @@ type RAGConfig struct {
 	BM25Enabled                  bool    `yaml:"bm25_enabled" mapstructure:"bm25_enabled"`
 	BM25TopK                     int     `yaml:"bm25_top_k" mapstructure:"bm25_top_k"`
 	RRFK                         int     `yaml:"rrf_k" mapstructure:"rrf_k"`
+}
+
+type RerankConfig struct {
+	Enabled        bool   `yaml:"enabled" mapstructure:"enabled"`
+	Provider       string `yaml:"provider" mapstructure:"provider"`
+	BaseURL        string `yaml:"base_url" mapstructure:"base_url"`
+	APIKey         string `yaml:"api_key" mapstructure:"api_key"`
+	Model          string `yaml:"model" mapstructure:"model"`
+	CandidateLimit int    `yaml:"candidate_limit" mapstructure:"candidate_limit"`
+	TopN           int    `yaml:"top_n" mapstructure:"top_n"`
+	TimeoutSeconds int    `yaml:"timeout_seconds" mapstructure:"timeout_seconds"`
 }
 
 type JWTConfig struct {
@@ -122,6 +134,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.bm25_enabled", true)
 	v.SetDefault("rag.bm25_top_k", 5)
 	v.SetDefault("rag.rrf_k", 60)
+	v.SetDefault("rerank.enabled", true)
+	v.SetDefault("rerank.provider", "dashscope")
+	v.SetDefault("rerank.base_url", "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank")
+	v.SetDefault("rerank.model", "qwen3-vl-rerank")
+	v.SetDefault("rerank.candidate_limit", 20)
+	v.SetDefault("rerank.top_n", 8)
+	v.SetDefault("rerank.timeout_seconds", 30)
 	v.SetDefault("jwt.expires_hours", 168)
 	v.SetDefault("search.bluge_dir", "storage/bluge")
 }
@@ -145,6 +164,13 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rag.bm25_enabled", "BM25_ENABLED")
 	_ = v.BindEnv("rag.bm25_top_k", "BM25_TOP_K")
 	_ = v.BindEnv("rag.rrf_k", "RRF_K")
+	_ = v.BindEnv("rerank.enabled", "RERANK_ENABLED")
+	_ = v.BindEnv("rerank.base_url", "RERANK_BASE_URL")
+	_ = v.BindEnv("rerank.api_key", "RERANK_API_KEY")
+	_ = v.BindEnv("rerank.model", "RERANK_MODEL")
+	_ = v.BindEnv("rerank.candidate_limit", "RERANK_CANDIDATE_LIMIT")
+	_ = v.BindEnv("rerank.top_n", "RERANK_TOP_N")
+	_ = v.BindEnv("rerank.timeout_seconds", "RERANK_TIMEOUT_SECONDS")
 	_ = v.BindEnv("jwt.secret", "JWT_SECRET")
 	_ = v.BindEnv("search.bluge_dir", "BLUGE_DIR")
 }
@@ -183,6 +209,24 @@ func applyDefaults(cfg *Config) {
 	if cfg.RAG.RRFK <= 0 {
 		cfg.RAG.RRFK = 60
 	}
+	if cfg.Rerank.Provider == "" {
+		cfg.Rerank.Provider = "dashscope"
+	}
+	if cfg.Rerank.BaseURL == "" {
+		cfg.Rerank.BaseURL = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+	}
+	if cfg.Rerank.Model == "" {
+		cfg.Rerank.Model = "qwen3-vl-rerank"
+	}
+	if cfg.Rerank.CandidateLimit <= 0 {
+		cfg.Rerank.CandidateLimit = 20
+	}
+	if cfg.Rerank.TopN <= 0 {
+		cfg.Rerank.TopN = 8
+	}
+	if cfg.Rerank.TimeoutSeconds <= 0 {
+		cfg.Rerank.TimeoutSeconds = 30
+	}
 	if cfg.JWT.ExpiresHours == 0 {
 		cfg.JWT.ExpiresHours = 168
 	}
@@ -206,6 +250,12 @@ func expandEnv(cfg *Config) {
 	cfg.LLM.APIKey = os.ExpandEnv(cfg.LLM.APIKey)
 	cfg.LLM.ChatModel = os.ExpandEnv(cfg.LLM.ChatModel)
 	cfg.LLM.EmbeddingModel = os.ExpandEnv(cfg.LLM.EmbeddingModel)
+	cfg.Rerank.BaseURL = os.ExpandEnv(cfg.Rerank.BaseURL)
+	cfg.Rerank.APIKey = os.ExpandEnv(cfg.Rerank.APIKey)
+	cfg.Rerank.Model = os.ExpandEnv(cfg.Rerank.Model)
+	if cfg.Rerank.APIKey == "" {
+		cfg.Rerank.APIKey = cfg.LLM.APIKey
+	}
 	cfg.JWT.Secret = os.ExpandEnv(cfg.JWT.Secret)
 	cfg.Search.BlugeDir = os.ExpandEnv(cfg.Search.BlugeDir)
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"OurAgent/internal/config"
 	"OurAgent/internal/database"
@@ -11,6 +12,7 @@ import (
 	"OurAgent/internal/handler"
 	"OurAgent/internal/rag"
 	"OurAgent/internal/repository"
+	apprerank "OurAgent/internal/rerank"
 	"OurAgent/internal/router"
 	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/service"
@@ -71,12 +73,18 @@ func main() {
 	bm25Retriever := rag.NewBM25Retriever(documentRepo, chunkRepo, keywordStore)
 	ragRetriever := rag.NewHybridRetriever(vectorRetriever, bm25Retriever)
 	queryRewriter := rag.NewLLMQueryRewriter(rewriteChatModel)
+	reranker := apprerank.NewDashScopeReranker(
+		cfg.Rerank.BaseURL,
+		cfg.Rerank.APIKey,
+		cfg.Rerank.Model,
+		time.Duration(cfg.Rerank.TimeoutSeconds)*time.Second,
+	)
 
 	indexer := document.NewIndexer(db, qdrant, keywordStore, minioClient, embedder, cfg)
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
 	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, keywordStore, minioClient, cfg)
-	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, chatModel, cfg)
+	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, reranker, chatModel, cfg)
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
 	}

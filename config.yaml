@@ -39,6 +39,16 @@ rag:
   bm25_top_k: 5
   rrf_k: 60
 
+rerank:
+  enabled: true
+  provider: "dashscope"
+  base_url: "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+  api_key: "${OPENAI_API_KEY}"
+  model: "qwen3-vl-rerank"
+  candidate_limit: 20
+  top_n: 8
+  timeout_seconds: 30
+
 jwt:
   secret: "${JWT_SECRET}"
   expires_hours: 168

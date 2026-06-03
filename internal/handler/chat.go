@@ -27,6 +27,7 @@ type chatRequest struct {
 	StrictMode       *bool    `json:"strict_mode"`
 	QueryRewrite     *bool    `json:"query_rewrite"`
 	Hybrid           *bool    `json:"hybrid"`
+	Rerank           *bool    `json:"rerank"`
 	BM25TopK         int      `json:"bm25_top_k"`
 }
 
@@ -65,6 +66,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		StrictMode:       req.StrictMode,
 		QueryRewrite:     req.QueryRewrite,
 		Hybrid:           req.Hybrid,
+		Rerank:           req.Rerank,
 		BM25TopK:         req.BM25TopK,
 	})
 	if err != nil {
@@ -103,6 +105,7 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 		StrictMode:       req.StrictMode,
 		QueryRewrite:     req.QueryRewrite,
 		Hybrid:           req.Hybrid,
+		Rerank:           req.Rerank,
 		BM25TopK:         req.BM25TopK,
 	})
 	if err != nil {

@@ -88,7 +88,7 @@ func (s *DocumentService) Upload(input UploadDocumentInput) (*model.Document, er
 		ObjectKey:       objectKey,
 		FileSize:        input.File.Size,
 		ContentType:     contentType,
-		Status:          "pending",
+		Status:          model.DocumentStatusPending,
 	}
 	if err := s.docs.Create(doc); err != nil {
 		return nil, pkgerrors.WithMessage(err, "保存文档记录失败")
@@ -130,8 +130,13 @@ func (s *DocumentService) Delete(ctx context.Context, userID, docID uint64) erro
 	if err != nil {
 		return pkgerrors.WithStack(ErrDocumentNotFound)
 	}
-	if doc.Status == "processing" {
+	if isDocumentIndexing(doc.Status) {
 		return pkgerrors.WithStack(ErrDocumentIndexing)
+	}
+	if doc.Status != model.DocumentStatusDeleting {
+		if err := s.docs.UpdateStatus(doc.ID, userID, model.DocumentStatusDeleting, "", doc.ChunkCount); err != nil {
+			return pkgerrors.WithMessage(err, "更新文档状态失败")
+		}
 	}
 	if err := s.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
 		return pkgerrors.WithMessage(err, "删除向量索引失败")
@@ -159,15 +164,19 @@ func (s *DocumentService) Reindex(userID, docID uint64) (*model.Document, error)
 	if err != nil {
 		return nil, pkgerrors.WithStack(ErrDocumentNotFound)
 	}
-	if doc.Status == "processing" {
+	if isDocumentIndexing(doc.Status) || doc.Status == model.DocumentStatusDeleting {
 		return nil, pkgerrors.WithStack(ErrDocumentIndexing)
 	}
-	if err := s.docs.UpdateStatus(doc.ID, userID, "pending", "", 0); err != nil {
+	if err := s.docs.UpdateStatus(doc.ID, userID, model.DocumentStatusPending, "", 0); err != nil {
 		return nil, pkgerrors.WithMessage(err, "更新文档状态失败")
 	}
-	doc.Status = "pending"
+	doc.Status = model.DocumentStatusPending
 	doc.ErrorMessage = ""
 	doc.ChunkCount = 0
 	s.indexer.IndexAsync(doc.ID)
 	return doc, nil
+}
+
+func isDocumentIndexing(status string) bool {
+	return status == model.DocumentStatusPending || status == model.DocumentStatusProcessing
 }

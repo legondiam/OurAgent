@@ -6,6 +6,14 @@ import (
 	"gorm.io/datatypes"
 )
 
+const (
+	DocumentStatusPending    = "pending"
+	DocumentStatusProcessing = "processing"
+	DocumentStatusCompleted  = "completed"
+	DocumentStatusFailed     = "failed"
+	DocumentStatusDeleting   = "deleting"
+)
+
 type User struct {
 	ID           uint64    `gorm:"primaryKey" json:"id"`
 	Username     string    `gorm:"size:100;uniqueIndex;not null" json:"username"`

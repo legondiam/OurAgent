@@ -45,7 +45,7 @@ func (r *DocumentRepository) FindByIDAndUserID(id, userID uint64) (*model.Docume
 func (r *DocumentRepository) CountCompleted(userID, kbID uint64) (int64, error) {
 	var count int64
 	if err := r.db.Model(&model.Document{}).
-		Where("knowledge_base_id = ? AND user_id = ? AND status = ?", kbID, userID, "completed").
+		Where("knowledge_base_id = ? AND user_id = ? AND status = ?", kbID, userID, model.DocumentStatusCompleted).
 		Count(&count).Error; err != nil {
 		return 0, pkgerrors.WithMessage(err, "统计已完成索引文档失败")
 	}

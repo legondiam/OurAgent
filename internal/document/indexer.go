@@ -46,7 +46,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 
-	if err := i.updateStatus(doc.ID, "processing", "", 0); err != nil {
+	if err := i.updateStatus(doc.ID, model.DocumentStatusProcessing, "", 0); err != nil {
 		return err
 	}
 
@@ -77,7 +77,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 	}
 	defer reader.Close()
 
-	text, err := ParseReader(doc.Filename, reader)
+	text, err := ParseReader(ctx, doc.Filename, reader)
 	if err != nil {
 		i.fail(doc.ID, fmt.Sprintf("解析文档失败: %v", err))
 		return err
@@ -168,7 +168,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		}
 	}
 
-	return i.updateStatus(doc.ID, "completed", "", childCount)
+	return i.updateStatus(doc.ID, model.DocumentStatusCompleted, "", childCount)
 }
 
 func embeddingText(chunk Chunk) string {
@@ -185,12 +185,12 @@ func (i *Indexer) updateStatus(documentID uint64, status, message string, chunkC
 	}
 	if chunkCount > 0 {
 		updates["chunk_count"] = chunkCount
-	} else if status == "processing" || status == "failed" {
+	} else if status == model.DocumentStatusProcessing || status == model.DocumentStatusFailed {
 		updates["chunk_count"] = 0
 	}
 	return i.db.Model(&model.Document{}).Where("id = ?", documentID).Updates(updates).Error
 }
 
 func (i *Indexer) fail(documentID uint64, message string) {
-	_ = i.updateStatus(documentID, "failed", message, 0)
+	_ = i.updateStatus(documentID, model.DocumentStatusFailed, message, 0)
 }

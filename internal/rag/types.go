@@ -14,6 +14,10 @@ type Retriever interface {
 	Retrieve(ctx context.Context, req RetrieveRequest) ([]RetrievedChunk, error)
 }
 
+type Reranker interface {
+	Rerank(ctx context.Context, req RerankRequest) (*RerankResult, error)
+}
+
 type RetrieveRequest struct {
 	UserID          uint64
 	KnowledgeBaseID uint64
@@ -28,15 +32,18 @@ type RetrieveRequest struct {
 }
 
 type RetrievedChunk struct {
-	Chunk          model.DocumentParentChunk
-	MatchedChunk   model.DocumentChildChunk
-	Document       model.Document
-	Score          float64
-	MatchedQueries []string
-	RecallSources  []string
-	VectorScore    float64
-	BM25Score      float64
-	RRFScore       float64
+	Chunk            model.DocumentParentChunk
+	MatchedChunk     model.DocumentChildChunk
+	Document         model.Document
+	Score            float64
+	MatchedQueries   []string
+	RecallSources    []string
+	VectorScore      float64
+	BM25Score        float64
+	RRFScore         float64
+	RerankScore      float64
+	RerankRank       int
+	BeforeRerankRank int
 }
 
 type Request struct {
@@ -54,6 +61,9 @@ type Request struct {
 	BM25Enabled                 bool
 	BM25TopK                    int
 	RRFK                        int
+	Rerank                      bool
+	RerankCandidateLimit        int
+	RerankTopN                  int
 }
 
 type PreparedChat struct {
@@ -85,40 +95,47 @@ type Source struct {
 }
 
 type RetrievalTrace struct {
-	Query             string       `json:"query"`
-	TopK              int          `json:"top_k"`
-	ScoreThreshold    float64      `json:"score_threshold"`
-	MaxContextTokens  int          `json:"max_context_tokens"`
-	StrictMode        bool         `json:"strict_mode"`
-	RewriteEnabled    bool         `json:"rewrite_enabled"`
-	RewrittenQueries  []TraceQuery `json:"rewritten_queries"`
-	RewriteError      string       `json:"rewrite_error,omitempty"`
-	HybridEnabled     bool         `json:"hybrid_enabled"`
-	BM25Enabled       bool         `json:"bm25_enabled"`
-	RRFK              int          `json:"rrf_k"`
-	BM25Error         string       `json:"bm25_error,omitempty"`
-	Hits              []TraceHit   `json:"hits"`
-	UsedChunkCount    int          `json:"used_chunk_count"`
-	FilteredCount     int          `json:"filtered_count"`
-	ContextTokenCount int          `json:"context_token_count"`
-	RejectReason      string       `json:"reject_reason,omitempty"`
+	Query                string       `json:"query"`
+	TopK                 int          `json:"top_k"`
+	ScoreThreshold       float64      `json:"score_threshold"`
+	MaxContextTokens     int          `json:"max_context_tokens"`
+	StrictMode           bool         `json:"strict_mode"`
+	RewriteEnabled       bool         `json:"rewrite_enabled"`
+	RewrittenQueries     []TraceQuery `json:"rewritten_queries"`
+	RewriteError         string       `json:"rewrite_error,omitempty"`
+	HybridEnabled        bool         `json:"hybrid_enabled"`
+	BM25Enabled          bool         `json:"bm25_enabled"`
+	RRFK                 int          `json:"rrf_k"`
+	BM25Error            string       `json:"bm25_error,omitempty"`
+	RerankEnabled        bool         `json:"rerank_enabled"`
+	RerankModel          string       `json:"rerank_model,omitempty"`
+	RerankCandidateCount int          `json:"rerank_candidate_count"`
+	RerankError          string       `json:"rerank_error,omitempty"`
+	Hits                 []TraceHit   `json:"hits"`
+	UsedChunkCount       int          `json:"used_chunk_count"`
+	FilteredCount        int          `json:"filtered_count"`
+	ContextTokenCount    int          `json:"context_token_count"`
+	RejectReason         string       `json:"reject_reason,omitempty"`
 }
 
 type TraceHit struct {
-	ChunkID        uint64   `json:"chunk_id"`
-	DocumentID     uint64   `json:"document_id"`
-	DocumentName   string   `json:"document_name"`
-	SectionPath    string   `json:"section_path"`
-	ParentChunkID  uint64   `json:"parent_chunk_id"`
-	ChunkIndex     int      `json:"chunk_index"`
-	Score          float64  `json:"score"`
-	MatchedQueries []string `json:"matched_queries,omitempty"`
-	RecallSources  []string `json:"recall_sources,omitempty"`
-	VectorScore    float64  `json:"vector_score,omitempty"`
-	BM25Score      float64  `json:"bm25_score,omitempty"`
-	RRFScore       float64  `json:"rrf_score,omitempty"`
-	Used           bool     `json:"used"`
-	Reason         string   `json:"reason,omitempty"`
+	ChunkID          uint64   `json:"chunk_id"`
+	DocumentID       uint64   `json:"document_id"`
+	DocumentName     string   `json:"document_name"`
+	SectionPath      string   `json:"section_path"`
+	ParentChunkID    uint64   `json:"parent_chunk_id"`
+	ChunkIndex       int      `json:"chunk_index"`
+	Score            float64  `json:"score"`
+	MatchedQueries   []string `json:"matched_queries,omitempty"`
+	RecallSources    []string `json:"recall_sources,omitempty"`
+	VectorScore      float64  `json:"vector_score,omitempty"`
+	BM25Score        float64  `json:"bm25_score,omitempty"`
+	RRFScore         float64  `json:"rrf_score,omitempty"`
+	RerankScore      float64  `json:"rerank_score,omitempty"`
+	RerankRank       int      `json:"rerank_rank,omitempty"`
+	BeforeRerankRank int      `json:"before_rerank_rank,omitempty"`
+	Used             bool     `json:"used"`
+	Reason           string   `json:"reason,omitempty"`
 }
 
 type TraceQuery struct {
@@ -138,6 +155,7 @@ func NewTrace(req Request, rejectReason string) RetrievalTrace {
 		HybridEnabled:    req.HybridEnabled,
 		BM25Enabled:      req.BM25Enabled,
 		RRFK:             req.RRFK,
+		RerankEnabled:    req.Rerank,
 		Hits:             []TraceHit{},
 		RewrittenQueries: []TraceQuery{},
 		RejectReason:     rejectReason,

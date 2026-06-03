@@ -37,6 +37,7 @@ type ChatRequest struct {
 	StrictMode       *bool
 	QueryRewrite     *bool
 	Hybrid           *bool
+	Rerank           *bool
 	BM25TopK         int
 }
 
@@ -61,8 +62,8 @@ type FeedbackInput struct {
 	Reason    string
 }
 
-func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository, docs *repository.DocumentRepository, logs *repository.ChatLogRepository, retriever rag.Retriever, rewriter rag.QueryRewriter, chat einomodel.BaseChatModel, cfg *config.Config) (*ChatService, error) {
-	ragChain, err := rag.NewRAGChain(ctx, retriever, rewriter, chat, cfg.LLM.ChatModel)
+func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository, docs *repository.DocumentRepository, logs *repository.ChatLogRepository, retriever rag.Retriever, rewriter rag.QueryRewriter, reranker rag.Reranker, chat einomodel.BaseChatModel, cfg *config.Config) (*ChatService, error) {
+	ragChain, err := rag.NewRAGChain(ctx, retriever, rewriter, reranker, chat, cfg.LLM.ChatModel, cfg.Rerank.Model)
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "初始化 Eino RAG Chain 失败")
 	}
@@ -287,6 +288,24 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	if bm25TopK > 20 {
 		bm25TopK = 20
 	}
+	rerankEnabled := s.cfg.Rerank.Enabled
+	if req.Rerank != nil {
+		rerankEnabled = *req.Rerank
+	}
+	rerankCandidateLimit := s.cfg.Rerank.CandidateLimit
+	if rerankCandidateLimit <= 0 {
+		rerankCandidateLimit = 20
+	}
+	if rerankCandidateLimit > 50 {
+		rerankCandidateLimit = 50
+	}
+	rerankTopN := s.cfg.Rerank.TopN
+	if rerankTopN <= 0 {
+		rerankTopN = 8
+	}
+	if rerankTopN > rerankCandidateLimit {
+		rerankTopN = rerankCandidateLimit
+	}
 
 	return rag.Request{
 		UserID:                      req.UserID,
@@ -303,6 +322,9 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		BM25Enabled:                 s.cfg.RAG.BM25Enabled,
 		BM25TopK:                    bm25TopK,
 		RRFK:                        s.cfg.RAG.RRFK,
+		Rerank:                      rerankEnabled,
+		RerankCandidateLimit:        rerankCandidateLimit,
+		RerankTopN:                  rerankTopN,
 	}, nil
 }
 

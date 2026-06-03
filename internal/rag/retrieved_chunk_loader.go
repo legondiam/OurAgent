@@ -55,6 +55,9 @@ func loadRetrievedChunks(_ context.Context, docs *repository.DocumentRepository,
 	}
 	docByID := make(map[uint64]model.Document, len(documents))
 	for _, doc := range documents {
+		if doc.Status != model.DocumentStatusCompleted {
+			continue
+		}
 		docByID[doc.ID] = doc
 	}
 
@@ -72,10 +75,14 @@ func loadRetrievedChunks(_ context.Context, docs *repository.DocumentRepository,
 		if !ok {
 			continue
 		}
+		doc, ok := docByID[child.DocumentID]
+		if !ok {
+			continue
+		}
 		results = append(results, RetrievedChunk{
 			Chunk:        parent,
 			MatchedChunk: child,
-			Document:     docByID[child.DocumentID],
+			Document:     doc,
 			Score:        hit.Score,
 		})
 	}
