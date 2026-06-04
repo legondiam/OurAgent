@@ -10,6 +10,7 @@ import (
 	"OurAgent/internal/document"
 	"OurAgent/internal/einoapp"
 	"OurAgent/internal/handler"
+	"OurAgent/internal/queue"
 	"OurAgent/internal/rag"
 	"OurAgent/internal/repository"
 	apprerank "OurAgent/internal/rerank"
@@ -17,6 +18,7 @@ import (
 	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/service"
 	"OurAgent/internal/storage"
+	"OurAgent/internal/tasks"
 	"OurAgent/internal/vectorstore"
 	"OurAgent/pkg/logger"
 
@@ -81,9 +83,27 @@ func main() {
 	)
 
 	indexer := document.NewIndexer(db, qdrant, keywordStore, minioClient, embedder, cfg)
+	if !cfg.Rabbit.Enabled {
+		logger.Logger.Fatal("RabbitMQ 未启用，无法启动文档异步任务")
+	}
+	rabbitClient, err := queue.NewRabbitMQClient(cfg.Rabbit)
+	if err != nil {
+		logger.Logger.Fatal("初始化 RabbitMQ 失败", zap.Error(err))
+	}
+	defer rabbitClient.Close()
+	taskProducer := tasks.NewProducer(rabbitClient)
+	indexConsumer := tasks.NewIndexConsumer(rabbitClient, documentRepo, indexer, cfg.Rabbit)
+	if err := indexConsumer.Start(context.Background(), cfg.Rabbit.IndexQueue); err != nil {
+		logger.Logger.Fatal("启动文档索引消费者失败", zap.Error(err))
+	}
+	deleteConsumer := tasks.NewDeleteConsumer(rabbitClient, documentRepo, chunkRepo, qdrant, keywordStore, minioClient, cfg.Rabbit)
+	if err := deleteConsumer.Start(context.Background(), cfg.Rabbit.DeleteQueue); err != nil {
+		logger.Logger.Fatal("启动文档删除清理消费者失败", zap.Error(err))
+	}
+
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
-	documentService := service.NewDocumentService(documentRepo, chunkRepo, kbRepo, indexer, qdrant, keywordStore, minioClient, cfg)
+	documentService := service.NewDocumentService(documentRepo, kbRepo, taskProducer, minioClient)
 	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, reranker, chatModel, cfg)
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))

@@ -66,7 +66,7 @@ routing_key: document.delete.cleanup
 queue: ouragent.document.delete.cleanup
 ```
 
-重试建议使用TTL重试队列加死信交换机：
+重试建议使用TTL重试队列加死信交换机。删除清理的首次投递也先进入`ouragent.document.delete.cleanup.retry`，等待TTL到期后再自动进入真正执行删除的主队列：
 
 ```text
 ouragent.document.index.retry
@@ -169,11 +169,12 @@ DELETE /documents/:id
 -> 查询并校验文档归属
 -> 如果status=pending或processing，拒绝删除
 -> 将status更新为deleting
--> 发布document.delete.cleanup消息
+-> 发布document.delete.cleanup.retry消息
+-> 等待TTL到期后自动转入document.delete.cleanup队列
 -> 返回成功或deleting状态
 ```
 
-这里的关键是先切`deleting`，再发布清理消息。只要状态切换成功，该文档就不会进入RAG。
+这里的关键是先切`deleting`，再发布延迟清理消息。只要状态切换成功，该文档就不会进入RAG，物理清理可以等外部存储或索引服务恢复后再执行。
 
 如果消息发布失败：
 
@@ -289,11 +290,11 @@ cmd/server
 
 internal/service/document_service.go
   Upload/Reindex不再调用IndexAsync，改为发布document.index消息
-  Delete改为切deleting状态后发布document.delete.cleanup消息
+  Delete改为切deleting状态后发布document.delete.cleanup.retry延迟消息
 
 internal/document/indexer.go
   保留Index(ctx, documentID)
-  IndexAsync可以删除或改成兼容包装，不再直接go func
+  移除IndexAsync，消费者直接调用Index(ctx, documentID)
 
 internal/rag/retrieved_chunk_loader.go
   保持只允许completed文档进入RAG上下文
@@ -325,4 +326,3 @@ MVP 0.3.5暂不保证：
 ```
 
 这可以作为MVP 0.3.6或0.4的增强项。
-

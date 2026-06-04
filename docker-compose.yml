@@ -8,5 +8,15 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: ouragent-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_storage:/var/lib/rabbitmq
+
 volumes:
   qdrant_storage:
+  rabbitmq_storage:

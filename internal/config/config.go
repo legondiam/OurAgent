@@ -10,15 +10,16 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig `yaml:"server" mapstructure:"server"`
-	MySQL  MySQLConfig  `yaml:"mysql" mapstructure:"mysql"`
-	Qdrant QdrantConfig `yaml:"qdrant" mapstructure:"qdrant"`
-	MinIO  MinIOConfig  `yaml:"minio" mapstructure:"minio"`
-	LLM    LLMConfig    `yaml:"llm" mapstructure:"llm"`
-	RAG    RAGConfig    `yaml:"rag" mapstructure:"rag"`
-	Rerank RerankConfig `yaml:"rerank" mapstructure:"rerank"`
-	JWT    JWTConfig    `yaml:"jwt" mapstructure:"jwt"`
-	Search SearchConfig `yaml:"search" mapstructure:"search"`
+	Server ServerConfig   `yaml:"server" mapstructure:"server"`
+	MySQL  MySQLConfig    `yaml:"mysql" mapstructure:"mysql"`
+	Qdrant QdrantConfig   `yaml:"qdrant" mapstructure:"qdrant"`
+	MinIO  MinIOConfig    `yaml:"minio" mapstructure:"minio"`
+	LLM    LLMConfig      `yaml:"llm" mapstructure:"llm"`
+	RAG    RAGConfig      `yaml:"rag" mapstructure:"rag"`
+	Rerank RerankConfig   `yaml:"rerank" mapstructure:"rerank"`
+	JWT    JWTConfig      `yaml:"jwt" mapstructure:"jwt"`
+	Search SearchConfig   `yaml:"search" mapstructure:"search"`
+	Rabbit RabbitMQConfig `yaml:"rabbitmq" mapstructure:"rabbitmq"`
 }
 
 type ServerConfig struct {
@@ -88,6 +89,19 @@ type SearchConfig struct {
 	BlugeDir string `yaml:"bluge_dir" mapstructure:"bluge_dir"`
 }
 
+type RabbitMQConfig struct {
+	Enabled           bool   `yaml:"enabled" mapstructure:"enabled"`
+	URL               string `yaml:"url" mapstructure:"url"`
+	Exchange          string `yaml:"exchange" mapstructure:"exchange"`
+	IndexQueue        string `yaml:"index_queue" mapstructure:"index_queue"`
+	DeleteQueue       string `yaml:"delete_queue" mapstructure:"delete_queue"`
+	RetryDelaySeconds int    `yaml:"retry_delay_seconds" mapstructure:"retry_delay_seconds"`
+	MaxRetries        int    `yaml:"max_retries" mapstructure:"max_retries"`
+	IndexWorkers      int    `yaml:"index_workers" mapstructure:"index_workers"`
+	DeleteWorkers     int    `yaml:"delete_workers" mapstructure:"delete_workers"`
+	PrefetchCount     int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
+}
+
 // Load 读取并初始化应用配置
 func Load(path string) (*Config, error) {
 	_ = godotenv.Load()
@@ -143,6 +157,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rerank.timeout_seconds", 30)
 	v.SetDefault("jwt.expires_hours", 168)
 	v.SetDefault("search.bluge_dir", "storage/bluge")
+	v.SetDefault("rabbitmq.enabled", true)
+	v.SetDefault("rabbitmq.url", "amqp://guest:guest@localhost:5672/")
+	v.SetDefault("rabbitmq.exchange", "ouragent.tasks")
+	v.SetDefault("rabbitmq.index_queue", "ouragent.document.index")
+	v.SetDefault("rabbitmq.delete_queue", "ouragent.document.delete.cleanup")
+	v.SetDefault("rabbitmq.retry_delay_seconds", 30)
+	v.SetDefault("rabbitmq.max_retries", 5)
+	v.SetDefault("rabbitmq.index_workers", 2)
+	v.SetDefault("rabbitmq.delete_workers", 2)
+	v.SetDefault("rabbitmq.prefetch_count", 1)
 }
 
 func bindEnv(v *viper.Viper) {
@@ -173,6 +197,16 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rerank.timeout_seconds", "RERANK_TIMEOUT_SECONDS")
 	_ = v.BindEnv("jwt.secret", "JWT_SECRET")
 	_ = v.BindEnv("search.bluge_dir", "BLUGE_DIR")
+	_ = v.BindEnv("rabbitmq.enabled", "RABBITMQ_ENABLED")
+	_ = v.BindEnv("rabbitmq.url", "RABBITMQ_URL")
+	_ = v.BindEnv("rabbitmq.exchange", "RABBITMQ_EXCHANGE")
+	_ = v.BindEnv("rabbitmq.index_queue", "RABBITMQ_INDEX_QUEUE")
+	_ = v.BindEnv("rabbitmq.delete_queue", "RABBITMQ_DELETE_QUEUE")
+	_ = v.BindEnv("rabbitmq.retry_delay_seconds", "RABBITMQ_RETRY_DELAY_SECONDS")
+	_ = v.BindEnv("rabbitmq.max_retries", "RABBITMQ_MAX_RETRIES")
+	_ = v.BindEnv("rabbitmq.index_workers", "RABBITMQ_INDEX_WORKERS")
+	_ = v.BindEnv("rabbitmq.delete_workers", "RABBITMQ_DELETE_WORKERS")
+	_ = v.BindEnv("rabbitmq.prefetch_count", "RABBITMQ_PREFETCH_COUNT")
 }
 
 func applyDefaults(cfg *Config) {
@@ -236,6 +270,33 @@ func applyDefaults(cfg *Config) {
 	if cfg.MinIO.Bucket == "" {
 		cfg.MinIO.Bucket = "our-agent-documents"
 	}
+	if cfg.Rabbit.URL == "" {
+		cfg.Rabbit.URL = "amqp://guest:guest@localhost:5672/"
+	}
+	if cfg.Rabbit.Exchange == "" {
+		cfg.Rabbit.Exchange = "ouragent.tasks"
+	}
+	if cfg.Rabbit.IndexQueue == "" {
+		cfg.Rabbit.IndexQueue = "ouragent.document.index"
+	}
+	if cfg.Rabbit.DeleteQueue == "" {
+		cfg.Rabbit.DeleteQueue = "ouragent.document.delete.cleanup"
+	}
+	if cfg.Rabbit.RetryDelaySeconds <= 0 {
+		cfg.Rabbit.RetryDelaySeconds = 30
+	}
+	if cfg.Rabbit.MaxRetries <= 0 {
+		cfg.Rabbit.MaxRetries = 5
+	}
+	if cfg.Rabbit.IndexWorkers <= 0 {
+		cfg.Rabbit.IndexWorkers = 2
+	}
+	if cfg.Rabbit.DeleteWorkers <= 0 {
+		cfg.Rabbit.DeleteWorkers = 2
+	}
+	if cfg.Rabbit.PrefetchCount <= 0 {
+		cfg.Rabbit.PrefetchCount = 1
+	}
 }
 
 func expandEnv(cfg *Config) {
@@ -258,4 +319,8 @@ func expandEnv(cfg *Config) {
 	}
 	cfg.JWT.Secret = os.ExpandEnv(cfg.JWT.Secret)
 	cfg.Search.BlugeDir = os.ExpandEnv(cfg.Search.BlugeDir)
+	cfg.Rabbit.URL = os.ExpandEnv(cfg.Rabbit.URL)
+	cfg.Rabbit.Exchange = os.ExpandEnv(cfg.Rabbit.Exchange)
+	cfg.Rabbit.IndexQueue = os.ExpandEnv(cfg.Rabbit.IndexQueue)
+	cfg.Rabbit.DeleteQueue = os.ExpandEnv(cfg.Rabbit.DeleteQueue)
 }

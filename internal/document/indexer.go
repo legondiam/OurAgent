@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"OurAgent/internal/config"
 	"OurAgent/internal/model"
@@ -30,15 +29,6 @@ func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, keyword appsearch
 	return &Indexer{db: db, qdrant: qdrant, keyword: keyword, minio: minio, embedder: embedder, cfg: cfg}
 }
 
-// IndexAsync 异步执行文档索引
-func (i *Indexer) IndexAsync(documentID uint64) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		_ = i.Index(ctx, documentID)
-	}()
-}
-
 // Index 执行文档解析切片向量化和索引写入
 func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 	var doc model.Document
@@ -46,8 +36,15 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 		return err
 	}
 
-	if err := i.updateStatus(doc.ID, model.DocumentStatusProcessing, "", 0); err != nil {
+	if doc.Status != model.DocumentStatusPending {
+		return nil
+	}
+	locked, err := i.markProcessing(doc.ID)
+	if err != nil {
 		return err
+	}
+	if !locked {
+		return nil
 	}
 
 	if err := i.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
@@ -189,6 +186,20 @@ func (i *Indexer) updateStatus(documentID uint64, status, message string, chunkC
 		updates["chunk_count"] = 0
 	}
 	return i.db.Model(&model.Document{}).Where("id = ?", documentID).Updates(updates).Error
+}
+
+func (i *Indexer) markProcessing(documentID uint64) (bool, error) {
+	result := i.db.Model(&model.Document{}).
+		Where("id = ? AND status = ?", documentID, model.DocumentStatusPending).
+		Updates(map[string]interface{}{
+			"status":        model.DocumentStatusProcessing,
+			"error_message": "",
+			"chunk_count":   0,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func (i *Indexer) fail(documentID uint64, message string) {

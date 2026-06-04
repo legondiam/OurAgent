@@ -8,26 +8,23 @@ import (
 	"strings"
 	"time"
 
-	"OurAgent/internal/config"
-	"OurAgent/internal/document"
 	"OurAgent/internal/model"
 	"OurAgent/internal/repository"
-	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/storage"
-	"OurAgent/internal/vectorstore"
 
 	pkgerrors "github.com/pkg/errors"
 )
 
+type DocumentTaskPublisher interface {
+	PublishDocumentIndex(ctx context.Context, documentID, userID, knowledgeBaseID uint64) error
+	PublishDocumentDeleteCleanup(ctx context.Context, doc model.Document) error
+}
+
 type DocumentService struct {
-	docs    *repository.DocumentRepository
-	chunks  *repository.ChunkRepository
-	kbs     *repository.KnowledgeBaseRepository
-	indexer *document.Indexer
-	qdrant  *vectorstore.QdrantClient
-	keyword appsearch.KeywordStore
-	minio   *storage.MinIOClient
-	cfg     *config.Config
+	docs  *repository.DocumentRepository
+	kbs   *repository.KnowledgeBaseRepository
+	tasks DocumentTaskPublisher
+	minio *storage.MinIOClient
 }
 
 type UploadDocumentInput struct {
@@ -37,8 +34,8 @@ type UploadDocumentInput struct {
 	File    *multipart.FileHeader
 }
 
-func NewDocumentService(docs *repository.DocumentRepository, chunks *repository.ChunkRepository, kbs *repository.KnowledgeBaseRepository, indexer *document.Indexer, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, minio *storage.MinIOClient, cfg *config.Config) *DocumentService {
-	return &DocumentService{docs: docs, chunks: chunks, kbs: kbs, indexer: indexer, qdrant: qdrant, keyword: keyword, minio: minio, cfg: cfg}
+func NewDocumentService(docs *repository.DocumentRepository, kbs *repository.KnowledgeBaseRepository, taskPublisher DocumentTaskPublisher, minio *storage.MinIOClient) *DocumentService {
+	return &DocumentService{docs: docs, kbs: kbs, tasks: taskPublisher, minio: minio}
 }
 
 // Upload 保存上传文档并触发异步索引
@@ -66,6 +63,7 @@ func (s *DocumentService) Upload(input UploadDocumentInput) (*model.Document, er
 		return nil, pkgerrors.WithMessage(err, "打开上传文件失败")
 	}
 	defer file.Close()
+
 	contentType := input.File.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -93,8 +91,10 @@ func (s *DocumentService) Upload(input UploadDocumentInput) (*model.Document, er
 	if err := s.docs.Create(doc); err != nil {
 		return nil, pkgerrors.WithMessage(err, "保存文档记录失败")
 	}
-
-	s.indexer.IndexAsync(doc.ID)
+	if err := s.tasks.PublishDocumentIndex(ctx, doc.ID, doc.UserID, doc.KnowledgeBaseID); err != nil {
+		_ = s.docs.UpdateStatus(doc.ID, doc.UserID, model.DocumentStatusFailed, "索引任务投递失败: "+err.Error(), 0)
+		return nil, pkgerrors.WithMessage(err, "投递索引任务失败")
+	}
 	return doc, nil
 }
 
@@ -107,7 +107,6 @@ func (s *DocumentService) List(userID, kbID uint64) ([]model.Document, error) {
 	if !exists {
 		return nil, pkgerrors.WithStack(ErrKnowledgeBaseNotFound)
 	}
-
 	docs, err := s.docs.ListByKnowledgeBase(userID, kbID)
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "查询文档失败")
@@ -137,23 +136,10 @@ func (s *DocumentService) Delete(ctx context.Context, userID, docID uint64) erro
 		if err := s.docs.UpdateStatus(doc.ID, userID, model.DocumentStatusDeleting, "", doc.ChunkCount); err != nil {
 			return pkgerrors.WithMessage(err, "更新文档状态失败")
 		}
+		doc.Status = model.DocumentStatusDeleting
 	}
-	if err := s.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
-		return pkgerrors.WithMessage(err, "删除向量索引失败")
-	}
-	if s.keyword != nil {
-		if err := s.keyword.DeleteByDocumentID(ctx, doc.UserID, doc.ID); err != nil {
-			return pkgerrors.WithMessage(err, "删除关键词索引失败")
-		}
-	}
-	if err := s.chunks.DeleteByDocumentID(userID, docID); err != nil {
-		return pkgerrors.WithMessage(err, "删除文档切片失败")
-	}
-	if err := s.minio.DeleteObject(ctx, doc.ObjectKey); err != nil {
-		return err
-	}
-	if err := s.docs.DeleteByIDAndUserID(docID, userID); err != nil {
-		return pkgerrors.WithMessage(err, "删除文档记录失败")
+	if err := s.tasks.PublishDocumentDeleteCleanup(ctx, *doc); err != nil {
+		return pkgerrors.WithMessage(err, "投递文档删除清理任务失败")
 	}
 	return nil
 }
@@ -173,7 +159,10 @@ func (s *DocumentService) Reindex(userID, docID uint64) (*model.Document, error)
 	doc.Status = model.DocumentStatusPending
 	doc.ErrorMessage = ""
 	doc.ChunkCount = 0
-	s.indexer.IndexAsync(doc.ID)
+	if err := s.tasks.PublishDocumentIndex(context.Background(), doc.ID, doc.UserID, doc.KnowledgeBaseID); err != nil {
+		_ = s.docs.UpdateStatus(doc.ID, userID, model.DocumentStatusFailed, "索引任务投递失败: "+err.Error(), 0)
+		return nil, pkgerrors.WithMessage(err, "投递索引任务失败")
+	}
 	return doc, nil
 }
 

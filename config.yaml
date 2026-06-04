@@ -55,3 +55,15 @@ jwt:
 
 search:
   bluge_dir: "storage/bluge"
+
+rabbitmq:
+  enabled: true
+  url: "amqp://guest:guest@localhost:5672/"
+  exchange: "ouragent.tasks"
+  index_queue: "ouragent.document.index"
+  delete_queue: "ouragent.document.delete.cleanup"
+  retry_delay_seconds: 30
+  max_retries: 5
+  index_workers: 2
+  delete_workers: 2
+  prefetch_count: 1
