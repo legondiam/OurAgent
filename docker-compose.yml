@@ -11,6 +11,9 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: ouragent-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ouragent
+      RABBITMQ_DEFAULT_PASS: ouragent_pass
     ports:
       - "5672:5672"
       - "15672:15672"

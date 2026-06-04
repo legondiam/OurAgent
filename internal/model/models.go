@@ -40,7 +40,7 @@ type Document struct {
 	FileType        string    `gorm:"size:32;not null" json:"file_type"`
 	FilePath        string    `gorm:"size:1024" json:"file_path"`
 	BucketName      string    `gorm:"size:128" json:"bucket_name"`
-	ObjectKey       string    `gorm:"size:1024;index" json:"object_key"`
+	ObjectKey       string    `gorm:"size:1024" json:"object_key"`
 	FileSize        int64     `json:"file_size"`
 	ContentType     string    `gorm:"size:128" json:"content_type"`
 	Status          string    `gorm:"size:32;index;not null" json:"status"`

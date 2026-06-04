@@ -10,16 +10,17 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig   `yaml:"server" mapstructure:"server"`
-	MySQL  MySQLConfig    `yaml:"mysql" mapstructure:"mysql"`
-	Qdrant QdrantConfig   `yaml:"qdrant" mapstructure:"qdrant"`
-	MinIO  MinIOConfig    `yaml:"minio" mapstructure:"minio"`
-	LLM    LLMConfig      `yaml:"llm" mapstructure:"llm"`
-	RAG    RAGConfig      `yaml:"rag" mapstructure:"rag"`
-	Rerank RerankConfig   `yaml:"rerank" mapstructure:"rerank"`
-	JWT    JWTConfig      `yaml:"jwt" mapstructure:"jwt"`
-	Search SearchConfig   `yaml:"search" mapstructure:"search"`
-	Rabbit RabbitMQConfig `yaml:"rabbitmq" mapstructure:"rabbitmq"`
+	Server ServerConfig    `yaml:"server" mapstructure:"server"`
+	MySQL  MySQLConfig     `yaml:"mysql" mapstructure:"mysql"`
+	Qdrant QdrantConfig    `yaml:"qdrant" mapstructure:"qdrant"`
+	MinIO  MinIOConfig     `yaml:"minio" mapstructure:"minio"`
+	LLM    LLMConfig       `yaml:"llm" mapstructure:"llm"`
+	RAG    RAGConfig       `yaml:"rag" mapstructure:"rag"`
+	Rerank RerankConfig    `yaml:"rerank" mapstructure:"rerank"`
+	JWT    JWTConfig       `yaml:"jwt" mapstructure:"jwt"`
+	Search SearchConfig    `yaml:"search" mapstructure:"search"`
+	Rabbit RabbitMQConfig  `yaml:"rabbitmq" mapstructure:"rabbitmq"`
+	Web    WebSearchConfig `yaml:"web_search" mapstructure:"web_search"`
 }
 
 type ServerConfig struct {
@@ -102,6 +103,18 @@ type RabbitMQConfig struct {
 	PrefetchCount     int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
 }
 
+type WebSearchConfig struct {
+	Enabled        bool   `yaml:"enabled" mapstructure:"enabled"`
+	FallbackOnly   bool   `yaml:"fallback_only" mapstructure:"fallback_only"`
+	Provider       string `yaml:"provider" mapstructure:"provider"`
+	Endpoint       string `yaml:"endpoint" mapstructure:"endpoint"`
+	APIKey         string `yaml:"api_key" mapstructure:"api_key"`
+	Model          string `yaml:"model" mapstructure:"model"`
+	TimeoutSeconds int    `yaml:"timeout_seconds" mapstructure:"timeout_seconds"`
+	EnableSource   bool   `yaml:"enable_source" mapstructure:"enable_source"`
+	Disclaimer     string `yaml:"disclaimer" mapstructure:"disclaimer"`
+}
+
 // Load 读取并初始化应用配置
 func Load(path string) (*Config, error) {
 	_ = godotenv.Load()
@@ -167,6 +180,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.index_workers", 2)
 	v.SetDefault("rabbitmq.delete_workers", 2)
 	v.SetDefault("rabbitmq.prefetch_count", 1)
+	v.SetDefault("web_search.enabled", true)
+	v.SetDefault("web_search.fallback_only", true)
+	v.SetDefault("web_search.provider", "dashscope")
+	v.SetDefault("web_search.endpoint", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")
+	v.SetDefault("web_search.model", "qwen3.6-flash")
+	v.SetDefault("web_search.timeout_seconds", 60)
+	v.SetDefault("web_search.enable_source", true)
+	v.SetDefault("web_search.disclaimer", "当前知识库没有找到足够信息，以下内容基于联网搜索结果生成，仅供参考。网络资料可能不准确、过期或与实际情况不一致。")
 }
 
 func bindEnv(v *viper.Viper) {
@@ -207,6 +228,15 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rabbitmq.index_workers", "RABBITMQ_INDEX_WORKERS")
 	_ = v.BindEnv("rabbitmq.delete_workers", "RABBITMQ_DELETE_WORKERS")
 	_ = v.BindEnv("rabbitmq.prefetch_count", "RABBITMQ_PREFETCH_COUNT")
+	_ = v.BindEnv("web_search.enabled", "WEB_SEARCH_ENABLED")
+	_ = v.BindEnv("web_search.fallback_only", "WEB_SEARCH_FALLBACK_ONLY")
+	_ = v.BindEnv("web_search.provider", "WEB_SEARCH_PROVIDER")
+	_ = v.BindEnv("web_search.endpoint", "WEB_SEARCH_ENDPOINT")
+	_ = v.BindEnv("web_search.api_key", "WEB_SEARCH_API_KEY")
+	_ = v.BindEnv("web_search.model", "WEB_SEARCH_MODEL")
+	_ = v.BindEnv("web_search.timeout_seconds", "WEB_SEARCH_TIMEOUT_SECONDS")
+	_ = v.BindEnv("web_search.enable_source", "WEB_SEARCH_ENABLE_SOURCE")
+	_ = v.BindEnv("web_search.disclaimer", "WEB_SEARCH_DISCLAIMER")
 }
 
 func applyDefaults(cfg *Config) {
@@ -297,6 +327,24 @@ func applyDefaults(cfg *Config) {
 	if cfg.Rabbit.PrefetchCount <= 0 {
 		cfg.Rabbit.PrefetchCount = 1
 	}
+	if cfg.Web.Provider == "" {
+		cfg.Web.Provider = "dashscope"
+	}
+	if cfg.Web.Endpoint == "" {
+		cfg.Web.Endpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+	}
+	if cfg.Web.APIKey == "" {
+		cfg.Web.APIKey = cfg.LLM.APIKey
+	}
+	if cfg.Web.Model == "" {
+		cfg.Web.Model = "qwen3.6-flash"
+	}
+	if cfg.Web.TimeoutSeconds <= 0 {
+		cfg.Web.TimeoutSeconds = 60
+	}
+	if cfg.Web.Disclaimer == "" {
+		cfg.Web.Disclaimer = "当前知识库没有找到足够信息，以下内容基于联网搜索结果生成，仅供参考。网络资料可能不准确、过期或与实际情况不一致。"
+	}
 }
 
 func expandEnv(cfg *Config) {
@@ -323,4 +371,8 @@ func expandEnv(cfg *Config) {
 	cfg.Rabbit.Exchange = os.ExpandEnv(cfg.Rabbit.Exchange)
 	cfg.Rabbit.IndexQueue = os.ExpandEnv(cfg.Rabbit.IndexQueue)
 	cfg.Rabbit.DeleteQueue = os.ExpandEnv(cfg.Rabbit.DeleteQueue)
+	cfg.Web.Endpoint = os.ExpandEnv(cfg.Web.Endpoint)
+	cfg.Web.APIKey = os.ExpandEnv(cfg.Web.APIKey)
+	cfg.Web.Model = os.ExpandEnv(cfg.Web.Model)
+	cfg.Web.Disclaimer = os.ExpandEnv(cfg.Web.Disclaimer)
 }

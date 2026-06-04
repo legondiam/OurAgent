@@ -13,6 +13,7 @@ import (
 	"OurAgent/internal/model"
 	"OurAgent/internal/rag"
 	"OurAgent/internal/repository"
+	"OurAgent/internal/websearch"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	pkgerrors "github.com/pkg/errors"
@@ -24,21 +25,15 @@ type ChatService struct {
 	docs  *repository.DocumentRepository
 	logs  *repository.ChatLogRepository
 	chain *rag.RAGChain
+	web   websearch.Answerer
 	cfg   *config.Config
 }
 
 type ChatRequest struct {
-	UserID           uint64
-	KnowledgeBaseID  uint64
-	Question         string
-	TopK             int
-	ScoreThreshold   *float64
-	MaxContextTokens int
-	StrictMode       *bool
-	QueryRewrite     *bool
-	Hybrid           *bool
-	Rerank           *bool
-	BM25TopK         int
+	UserID          uint64
+	KnowledgeBaseID uint64
+	Question        string
+	WebSearch       bool
 }
 
 type ChatResponse struct {
@@ -62,15 +57,15 @@ type FeedbackInput struct {
 	Reason    string
 }
 
-func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository, docs *repository.DocumentRepository, logs *repository.ChatLogRepository, retriever rag.Retriever, rewriter rag.QueryRewriter, reranker rag.Reranker, chat einomodel.BaseChatModel, cfg *config.Config) (*ChatService, error) {
+func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository, docs *repository.DocumentRepository, logs *repository.ChatLogRepository, retriever rag.Retriever, rewriter rag.QueryRewriter, reranker rag.Reranker, chat einomodel.BaseChatModel, web websearch.Answerer, cfg *config.Config) (*ChatService, error) {
 	ragChain, err := rag.NewRAGChain(ctx, retriever, rewriter, reranker, chat, cfg.LLM.ChatModel, cfg.Rerank.Model)
 	if err != nil {
-		return nil, pkgerrors.WithMessage(err, "初始化 Eino RAG Chain 失败")
+		return nil, pkgerrors.WithMessage(err, "初始化Eino RAG Chain失败")
 	}
-	return &ChatService{kbs: kbs, docs: docs, logs: logs, chain: ragChain, cfg: cfg}, nil
+	return &ChatService{kbs: kbs, docs: docs, logs: logs, chain: ragChain, web: web, cfg: cfg}, nil
 }
 
-// Chat 执行知识库检索并生成回答
+// Chat执行知识库检索并生成回答
 func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	start := time.Now()
 
@@ -86,6 +81,8 @@ func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 			return nil, err
 		}
 	}
+	prepared = s.applyWebFallback(ctx, prepared)
+
 	// 保存问答日志并返回引用来源
 	logID, err := s.saveLog(prepared, start)
 	if err != nil {
@@ -94,7 +91,7 @@ func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	return &ChatResponse{Answer: prepared.Answer, Sources: prepared.Sources, ChatLogID: logID}, nil
 }
 
-// Stream 执行知识库检索并流式生成回答
+// Stream执行知识库检索并流式生成回答
 func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	start := time.Now()
 	// 校验业务权限并补齐检索参数
@@ -105,8 +102,9 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
-		// 校验阶段已经拒答时直接返回流式事件
+		// 验证阶段已经拒答时直接返回流式事件
 		if prepared != nil && prepared.Answer != "" {
+			prepared = s.applyWebFallback(ctx, prepared)
 			logID, err := s.saveLog(prepared, start)
 			if err != nil {
 				out <- StreamEvent{Type: "error", Err: pkgerrors.WithMessage(err, "保存问答日志失败")}
@@ -126,6 +124,8 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 		}
 		defer reader.Close()
 		var final *rag.PreparedChat
+		var withheldFallback strings.Builder
+		sentContent := false
 
 		// 持续读取模型片段，最终结果用于落库
 		for {
@@ -142,7 +142,17 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 				continue
 			}
 			if chunk.Content != "" {
+				if chunk.Content == rag.FallbackAnswer {
+					withheldFallback.WriteString(chunk.Content)
+					continue
+				}
+				if withheldFallback.Len() > 0 {
+					out <- StreamEvent{Type: "message", Content: withheldFallback.String()}
+					withheldFallback.Reset()
+					sentContent = true
+				}
 				out <- StreamEvent{Type: "message", Content: chunk.Content}
+				sentContent = true
 			}
 		}
 
@@ -154,6 +164,16 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 				Sources: []rag.Source{},
 				Trace:   rag.NewTrace(resolved, "流式回答没有返回最终结果"),
 			}
+		}
+		final = s.applyWebFallback(ctx, final)
+		if final.Trace.WebFallbackUsed {
+			out <- StreamEvent{Type: "message", Content: final.Answer}
+			sentContent = true
+		} else if withheldFallback.Len() > 0 {
+			out <- StreamEvent{Type: "message", Content: withheldFallback.String()}
+			sentContent = true
+		} else if !sentContent && final.Answer != "" {
+			out <- StreamEvent{Type: "message", Content: final.Answer}
 		}
 
 		// 流式结束后保存日志并发送来源和完成事件
@@ -168,7 +188,7 @@ func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan Strea
 	return out, nil
 }
 
-// ListLogs 查询用户问答日志
+// ListLogs查询用户问答日志
 func (s *ChatService) ListLogs(userID uint64) ([]model.ChatLog, error) {
 	logs, err := s.logs.ListByUserID(userID, 100)
 	if err != nil {
@@ -177,7 +197,7 @@ func (s *ChatService) ListLogs(userID uint64) ([]model.ChatLog, error) {
 	return logs, nil
 }
 
-// SubmitFeedback 保存用户问答反馈
+// SubmitFeedback保存用户问答反馈
 func (s *ChatService) SubmitFeedback(input FeedbackInput) (*model.ChatFeedback, error) {
 	input.Rating = strings.TrimSpace(input.Rating)
 	if input.Rating != "like" && input.Rating != "dislike" {
@@ -224,15 +244,63 @@ func (s *ChatService) validate(ctx context.Context, req ChatRequest) (rag.Reques
 	return resolved, nil, nil
 }
 
+// applyWebFallback在知识库拒答时尝试联网降级
+func (s *ChatService) applyWebFallback(ctx context.Context, prepared *rag.PreparedChat) *rag.PreparedChat {
+	if prepared == nil {
+		return prepared
+	}
+	prepared.Trace.WebFallbackEnabled = s.cfg.Web.Enabled && prepared.Request.WebSearch
+	if !s.shouldUseWebFallback(prepared) {
+		return prepared
+	}
+	prepared.Trace.WebFallbackReason = prepared.Trace.RejectReason
+	prepared.Trace.WebSearchProvider = s.cfg.Web.Provider
+	prepared.Trace.WebSearchModel = s.cfg.Web.Model
+
+	result, err := s.web.Answer(ctx, websearch.Request{
+		UserID:          prepared.Request.UserID,
+		KnowledgeBaseID: prepared.Request.KnowledgeBaseID,
+		Question:        prepared.Request.Question,
+	})
+	if err != nil {
+		prepared.Trace.WebSearchError = err.Error()
+		return prepared
+	}
+	prepared.Answer = result.Answer
+	prepared.Sources = webSourcesToRAGSources(result.Sources)
+	prepared.Trace.WebFallbackUsed = true
+	prepared.Trace.WebSearchResultCount = len(result.Sources)
+	return prepared
+}
+
+// shouldUseWebFallback判断是否需要触发联网降级
+func (s *ChatService) shouldUseWebFallback(prepared *rag.PreparedChat) bool {
+	if s.web == nil || !s.cfg.Web.Enabled || !s.cfg.Web.FallbackOnly || !prepared.Request.WebSearch {
+		return false
+	}
+	return prepared.Answer == rag.FallbackAnswer && prepared.Trace.UsedChunkCount == 0
+}
+
+// webSourcesToRAGSources转换网络来源为统一来源结构
+func webSourcesToRAGSources(sources []websearch.Source) []rag.Source {
+	result := make([]rag.Source, 0, len(sources))
+	for _, source := range sources {
+		result = append(result, rag.Source{
+			SourceType:     rag.SourceTypeWeb,
+			Title:          source.Title,
+			URL:            source.URL,
+			ContentPreview: source.Snippet,
+		})
+	}
+	return result
+}
+
 func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	req.Question = strings.TrimSpace(req.Question)
 	if req.Question == "" {
 		return rag.Request{}, pkgerrors.WithStack(ErrQuestionEmpty)
 	}
-	topK := req.TopK
-	if topK <= 0 {
-		topK = s.cfg.RAG.TopK
-	}
+	topK := s.cfg.RAG.TopK
 	if topK <= 0 {
 		topK = 5
 	}
@@ -241,17 +309,11 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	}
 
 	scoreThreshold := s.cfg.RAG.ScoreThreshold
-	if req.ScoreThreshold != nil {
-		scoreThreshold = *req.ScoreThreshold
-	}
 	if scoreThreshold < 0 {
 		scoreThreshold = 0
 	}
 
-	maxContextTokens := req.MaxContextTokens
-	if maxContextTokens <= 0 {
-		maxContextTokens = s.cfg.RAG.MaxContextTokens
-	}
+	maxContextTokens := s.cfg.RAG.MaxContextTokens
 	if maxContextTokens <= 0 {
 		maxContextTokens = 6000
 	}
@@ -260,13 +322,7 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	}
 
 	strictMode := s.cfg.RAG.StrictMode
-	if req.StrictMode != nil {
-		strictMode = *req.StrictMode
-	}
 	queryRewrite := s.cfg.RAG.QueryRewriteEnabled
-	if req.QueryRewrite != nil {
-		queryRewrite = *req.QueryRewrite
-	}
 	queryRewriteMaxQueries := s.cfg.RAG.QueryRewriteMaxQueries
 	if queryRewriteMaxQueries <= 0 {
 		queryRewriteMaxQueries = 3
@@ -275,13 +331,7 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		queryRewriteMaxQueries = 5
 	}
 	hybridEnabled := s.cfg.RAG.HybridEnabled
-	if req.Hybrid != nil {
-		hybridEnabled = *req.Hybrid
-	}
-	bm25TopK := req.BM25TopK
-	if bm25TopK <= 0 {
-		bm25TopK = s.cfg.RAG.BM25TopK
-	}
+	bm25TopK := s.cfg.RAG.BM25TopK
 	if bm25TopK <= 0 {
 		bm25TopK = 5
 	}
@@ -289,9 +339,6 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		bm25TopK = 20
 	}
 	rerankEnabled := s.cfg.Rerank.Enabled
-	if req.Rerank != nil {
-		rerankEnabled = *req.Rerank
-	}
 	rerankCandidateLimit := s.cfg.Rerank.CandidateLimit
 	if rerankCandidateLimit <= 0 {
 		rerankCandidateLimit = 20
@@ -325,6 +372,7 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		Rerank:                      rerankEnabled,
 		RerankCandidateLimit:        rerankCandidateLimit,
 		RerankTopN:                  rerankTopN,
+		WebSearch:                   req.WebSearch,
 	}, nil
 }
 

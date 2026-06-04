@@ -10,6 +10,11 @@ import (
 
 const FallbackAnswer = "根据当前知识库内容无法确认。"
 
+const (
+	SourceTypeKnowledgeBase = "knowledge_base"
+	SourceTypeWeb           = "web"
+)
+
 type Retriever interface {
 	Retrieve(ctx context.Context, req RetrieveRequest) ([]RetrievedChunk, error)
 }
@@ -64,6 +69,7 @@ type Request struct {
 	Rerank                      bool
 	RerankCandidateLimit        int
 	RerankTopN                  int
+	WebSearch                   bool
 }
 
 type PreparedChat struct {
@@ -84,14 +90,17 @@ type StreamChunk struct {
 }
 
 type Source struct {
-	DocumentID     uint64  `json:"document_id"`
-	DocumentName   string  `json:"document_name"`
-	SectionPath    string  `json:"section_path"`
-	ParentChunkID  uint64  `json:"parent_chunk_id"`
-	ChunkID        uint64  `json:"chunk_id"`
-	ChunkIndex     int     `json:"chunk_index"`
+	SourceType     string  `json:"source_type"`
+	DocumentID     uint64  `json:"document_id,omitempty"`
+	DocumentName   string  `json:"document_name,omitempty"`
+	SectionPath    string  `json:"section_path,omitempty"`
+	ParentChunkID  uint64  `json:"parent_chunk_id,omitempty"`
+	ChunkID        uint64  `json:"chunk_id,omitempty"`
+	ChunkIndex     int     `json:"chunk_index,omitempty"`
 	Score          float64 `json:"score"`
-	ContentPreview string  `json:"content_preview"`
+	ContentPreview string  `json:"content_preview,omitempty"`
+	Title          string  `json:"title,omitempty"`
+	URL            string  `json:"url,omitempty"`
 }
 
 type RetrievalTrace struct {
@@ -116,6 +125,13 @@ type RetrievalTrace struct {
 	FilteredCount        int          `json:"filtered_count"`
 	ContextTokenCount    int          `json:"context_token_count"`
 	RejectReason         string       `json:"reject_reason,omitempty"`
+	WebFallbackEnabled   bool         `json:"web_fallback_enabled"`
+	WebFallbackUsed      bool         `json:"web_fallback_used"`
+	WebFallbackReason    string       `json:"web_fallback_reason,omitempty"`
+	WebSearchProvider    string       `json:"web_search_provider,omitempty"`
+	WebSearchModel       string       `json:"web_search_model,omitempty"`
+	WebSearchResultCount int          `json:"web_search_result_count,omitempty"`
+	WebSearchError       string       `json:"web_search_error,omitempty"`
 }
 
 type TraceHit struct {

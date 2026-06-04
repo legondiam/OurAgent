@@ -20,15 +20,8 @@ func NewChatHandler(service *service.ChatService) *ChatHandler {
 }
 
 type chatRequest struct {
-	Question         string   `json:"question" binding:"required"`
-	TopK             int      `json:"top_k"`
-	ScoreThreshold   *float64 `json:"score_threshold"`
-	MaxContextTokens int      `json:"max_context_tokens"`
-	StrictMode       *bool    `json:"strict_mode"`
-	QueryRewrite     *bool    `json:"query_rewrite"`
-	Hybrid           *bool    `json:"hybrid"`
-	Rerank           *bool    `json:"rerank"`
-	BM25TopK         int      `json:"bm25_top_k"`
+	Question  string `json:"question" binding:"required"`
+	WebSearch bool   `json:"web_search"`
 }
 
 type feedbackRequest struct {
@@ -57,17 +50,10 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 	defer cancel()
 
 	resp, err := h.service.Chat(ctx, service.ChatRequest{
-		UserID:           userID,
-		KnowledgeBaseID:  kbID,
-		Question:         req.Question,
-		TopK:             req.TopK,
-		ScoreThreshold:   req.ScoreThreshold,
-		MaxContextTokens: req.MaxContextTokens,
-		StrictMode:       req.StrictMode,
-		QueryRewrite:     req.QueryRewrite,
-		Hybrid:           req.Hybrid,
-		Rerank:           req.Rerank,
-		BM25TopK:         req.BM25TopK,
+		UserID:          userID,
+		KnowledgeBaseID: kbID,
+		Question:        req.Question,
+		WebSearch:       req.WebSearch,
 	})
 	if err != nil {
 		handleChatError(c, err, "问答失败")
@@ -96,17 +82,10 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
 	defer cancel()
 	events, err := h.service.Stream(ctx, service.ChatRequest{
-		UserID:           userID,
-		KnowledgeBaseID:  kbID,
-		Question:         req.Question,
-		TopK:             req.TopK,
-		ScoreThreshold:   req.ScoreThreshold,
-		MaxContextTokens: req.MaxContextTokens,
-		StrictMode:       req.StrictMode,
-		QueryRewrite:     req.QueryRewrite,
-		Hybrid:           req.Hybrid,
-		Rerank:           req.Rerank,
-		BM25TopK:         req.BM25TopK,
+		UserID:          userID,
+		KnowledgeBaseID: kbID,
+		Question:        req.Question,
+		WebSearch:       req.WebSearch,
 	})
 	if err != nil {
 		handleChatError(c, err, "问答失败")

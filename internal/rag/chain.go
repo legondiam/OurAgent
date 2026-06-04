@@ -287,6 +287,7 @@ func (c *RAGChain) contextBuilderNode(_ context.Context, state *chainState) (*ch
 		usedTokens += tokens
 
 		state.sources = append(state.sources, Source{
+			SourceType:     SourceTypeKnowledgeBase,
 			DocumentID:     item.Chunk.DocumentID,
 			DocumentName:   item.Document.Filename,
 			SectionPath:    item.MatchedChunk.SectionPath,

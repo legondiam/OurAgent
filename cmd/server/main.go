@@ -20,6 +20,7 @@ import (
 	"OurAgent/internal/storage"
 	"OurAgent/internal/tasks"
 	"OurAgent/internal/vectorstore"
+	"OurAgent/internal/websearch"
 	"OurAgent/pkg/logger"
 
 	"go.uber.org/zap"
@@ -104,7 +105,11 @@ func main() {
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
 	documentService := service.NewDocumentService(documentRepo, kbRepo, taskProducer, minioClient)
-	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, reranker, chatModel, cfg)
+	var webFallback websearch.Answerer
+	if cfg.Web.Enabled {
+		webFallback = websearch.NewDashScopeAnswerer(cfg.Web)
+	}
+	chatService, err := service.NewChatService(context.Background(), kbRepo, documentRepo, chatLogRepo, ragRetriever, queryRewriter, reranker, chatModel, webFallback, cfg)
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
 	}
