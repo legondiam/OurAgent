@@ -1,5 +1,8 @@
 .idea/
 .env
+config.yaml
+docker-compose.yml
+docs/
 storage/
 tmp/
 logs/
@@ -8,6 +11,5 @@ logs/
 .vscode/
 *.md
 !README.md
-!docs/
-!docs/**/*.md
+!config.yaml.example
 *.tex
