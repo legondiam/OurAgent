@@ -21,10 +21,11 @@ import (
 )
 
 type ConsumerOptions struct {
-	MaxRetries    int
-	Prefetch      int
-	IndexWorkers  int
-	DeleteWorkers int
+	MaxRetries       int
+	Prefetch         int
+	IndexWorkers     int
+	DeleteWorkers    int
+	SourceSyncWorker int
 }
 
 type IndexConsumer struct {
@@ -206,10 +207,11 @@ func publishRetry(ctx context.Context, q *queue.Client, d queue.Delivery, maxRet
 
 func optionsFromConfig(cfg config.RabbitMQConfig) ConsumerOptions {
 	opts := ConsumerOptions{
-		MaxRetries:    cfg.MaxRetries,
-		Prefetch:      cfg.PrefetchCount,
-		IndexWorkers:  cfg.IndexWorkers,
-		DeleteWorkers: cfg.DeleteWorkers,
+		MaxRetries:       cfg.MaxRetries,
+		Prefetch:         cfg.PrefetchCount,
+		IndexWorkers:     cfg.IndexWorkers,
+		DeleteWorkers:    cfg.DeleteWorkers,
+		SourceSyncWorker: cfg.SourceSyncWorkers,
 	}
 	if opts.MaxRetries <= 0 {
 		opts.MaxRetries = 5
@@ -222,6 +224,9 @@ func optionsFromConfig(cfg config.RabbitMQConfig) ConsumerOptions {
 	}
 	if opts.DeleteWorkers <= 0 {
 		opts.DeleteWorkers = 2
+	}
+	if opts.SourceSyncWorker <= 0 {
+		opts.SourceSyncWorker = 1
 	}
 	return opts
 }

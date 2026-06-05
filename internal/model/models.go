@@ -14,6 +14,22 @@ const (
 	DocumentStatusDeleting   = "deleting"
 )
 
+const (
+	KnowledgeSourceStatusIdle     = "idle"
+	KnowledgeSourceStatusQueued   = "queued"
+	KnowledgeSourceStatusSyncing  = "syncing"
+	KnowledgeSourceStatusFailed   = "failed"
+	KnowledgeSourceStatusDisabled = "disabled"
+)
+
+const (
+	ExternalDocumentStatusSynced  = "synced"
+	ExternalDocumentStatusChanged = "changed"
+	ExternalDocumentStatusMissing = "missing"
+	ExternalDocumentStatusDeleted = "deleted"
+	ExternalDocumentStatusFailed  = "failed"
+)
+
 type User struct {
 	ID           uint64    `gorm:"primaryKey" json:"id"`
 	Username     string    `gorm:"size:100;uniqueIndex;not null" json:"username"`
@@ -30,6 +46,43 @@ type KnowledgeBase struct {
 	Description string    `gorm:"type:text" json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type KnowledgeSource struct {
+	ID                  uint64         `gorm:"primaryKey" json:"id"`
+	UserID              uint64         `gorm:"index;not null" json:"user_id"`
+	KnowledgeBaseID     uint64         `gorm:"index;not null" json:"knowledge_base_id"`
+	Provider            string         `gorm:"size:64;not null" json:"provider"`
+	Name                string         `gorm:"size:255;not null" json:"name"`
+	ConfigJSON          datatypes.JSON `gorm:"type:json" json:"config_json"`
+	CredentialJSON      datatypes.JSON `gorm:"type:json" json:"-"`
+	Enabled             bool           `gorm:"index;not null;default:true" json:"enabled"`
+	SyncIntervalSeconds int            `json:"sync_interval_seconds"`
+	SyncStatus          string         `gorm:"size:32;index;not null" json:"sync_status"`
+	LastSyncAt          *time.Time     `json:"last_sync_at"`
+	NextSyncAt          *time.Time     `gorm:"index" json:"next_sync_at"`
+	LastError           string         `gorm:"type:text" json:"last_error"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+}
+
+type ExternalDocument struct {
+	ID              uint64     `gorm:"primaryKey" json:"id"`
+	SourceID        uint64     `gorm:"uniqueIndex:idx_external_source_remote;index;not null" json:"source_id"`
+	UserID          uint64     `gorm:"index;not null" json:"user_id"`
+	KnowledgeBaseID uint64     `gorm:"index;not null" json:"knowledge_base_id"`
+	DocumentID      uint64     `gorm:"index;not null" json:"document_id"`
+	Provider        string     `gorm:"size:64;not null" json:"provider"`
+	RemoteID        string     `gorm:"size:255;uniqueIndex:idx_external_source_remote;not null" json:"remote_id"`
+	RemoteURL       string     `gorm:"size:1024" json:"remote_url"`
+	RemoteTitle     string     `gorm:"size:255" json:"remote_title"`
+	RemoteUpdatedAt *time.Time `json:"remote_updated_at"`
+	ContentHash     string     `gorm:"size:128" json:"content_hash"`
+	SyncStatus      string     `gorm:"size:32;index;not null" json:"sync_status"`
+	LastSyncedAt    *time.Time `json:"last_synced_at"`
+	LastError       string     `gorm:"type:text" json:"last_error"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type Document struct {

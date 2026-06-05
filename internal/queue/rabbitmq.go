@@ -19,6 +19,9 @@ const (
 	DocumentDeleteRoutingKey      = "document.delete.cleanup"
 	DocumentDeleteRetryRoutingKey = "document.delete.cleanup.retry"
 	DocumentDeleteDLQRoutingKey   = "document.delete.cleanup.dlq"
+	SourceSyncRoutingKey          = "source.sync"
+	SourceSyncRetryRoutingKey     = "source.sync.retry"
+	SourceSyncDLQRoutingKey       = "source.sync.dlq"
 	contentTypeJSON               = "application/json"
 )
 
@@ -134,6 +137,9 @@ func (c *Client) declareTopology(cfg config.RabbitMQConfig) error {
 		return err
 	}
 	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.DeleteQueue, DocumentDeleteRoutingKey, DocumentDeleteRetryRoutingKey, DocumentDeleteDLQRoutingKey, cfg.RetryDelaySeconds); err != nil {
+		return err
+	}
+	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.SourceSyncQueue, SourceSyncRoutingKey, SourceSyncRetryRoutingKey, SourceSyncDLQRoutingKey, cfg.RetryDelaySeconds); err != nil {
 		return err
 	}
 	return nil

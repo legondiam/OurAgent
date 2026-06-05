@@ -10,6 +10,7 @@ import (
 	"OurAgent/internal/document"
 	"OurAgent/internal/einoapp"
 	"OurAgent/internal/handler"
+	appoauth "OurAgent/internal/oauth"
 	"OurAgent/internal/queue"
 	"OurAgent/internal/rag"
 	"OurAgent/internal/repository"
@@ -17,6 +18,7 @@ import (
 	"OurAgent/internal/router"
 	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/service"
+	appsource "OurAgent/internal/source"
 	"OurAgent/internal/storage"
 	"OurAgent/internal/tasks"
 	"OurAgent/internal/vectorstore"
@@ -70,6 +72,7 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	kbRepo := repository.NewKnowledgeBaseRepository(db)
 	documentRepo := repository.NewDocumentRepository(db)
+	sourceRepo := repository.NewSourceRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
 	chatLogRepo := repository.NewChatLogRepository(db)
 	vectorRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
@@ -105,6 +108,11 @@ func main() {
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
 	documentService := service.NewDocumentService(documentRepo, kbRepo, taskProducer, minioClient)
+	sourceService := appsource.NewService(sourceRepo, kbRepo, documentRepo, minioClient, taskProducer)
+	sourceConsumer := appsource.NewConsumer(rabbitClient, sourceRepo, sourceService, cfg.Rabbit)
+	if err := sourceConsumer.Start(context.Background(), cfg.Rabbit.SourceSyncQueue); err != nil {
+		logger.Logger.Fatal("启动知识源同步消费者失败", zap.Error(err))
+	}
 	var webFallback websearch.Answerer
 	if cfg.Web.Enabled {
 		webFallback = websearch.NewDashScopeAnswerer(cfg.Web)
@@ -117,6 +125,8 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 	kbHandler := handler.NewKnowledgeBaseHandler(kbService)
 	documentHandler := handler.NewDocumentHandler(documentService)
+	sourceHandler := handler.NewSourceHandler(sourceService)
+	oauthHandler := handler.NewOAuthHandler(appoauth.NewNotionService(cfg.OAuth.Notion, cfg.JWT.Secret, sourceRepo))
 	chatHandler := handler.NewChatHandler(chatService)
 
 	r := router.New(router.Dependencies{
@@ -125,6 +135,8 @@ func main() {
 		KBHandler:       kbHandler,
 		DocumentHandler: documentHandler,
 		ChatHandler:     chatHandler,
+		SourceHandler:   sourceHandler,
+		OAuthHandler:    oauthHandler,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

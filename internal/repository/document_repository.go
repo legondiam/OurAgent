@@ -88,3 +88,22 @@ func (r *DocumentRepository) UpdateStatus(id, userID uint64, status, message str
 	}
 	return nil
 }
+
+func (r *DocumentRepository) UpdateSyncedDocument(doc *model.Document) error {
+	updates := map[string]interface{}{
+		"filename":      doc.Filename,
+		"file_type":     doc.FileType,
+		"file_path":     doc.FilePath,
+		"bucket_name":   doc.BucketName,
+		"object_key":    doc.ObjectKey,
+		"file_size":     doc.FileSize,
+		"content_type":  doc.ContentType,
+		"status":        doc.Status,
+		"error_message": doc.ErrorMessage,
+		"chunk_count":   doc.ChunkCount,
+	}
+	if err := r.db.Model(&model.Document{}).Where("id = ? AND user_id = ?", doc.ID, doc.UserID).Updates(updates).Error; err != nil {
+		return pkgerrors.WithMessage(err, "更新同步文档失败")
+	}
+	return nil
+}

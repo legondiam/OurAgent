@@ -46,3 +46,15 @@ func (p *Producer) PublishDocumentDeleteCleanup(ctx context.Context, doc model.D
 		CreatedAt:       time.Now(),
 	})
 }
+
+func (p *Producer) PublishSourceSync(ctx context.Context, sourceID, userID, knowledgeBaseID uint64) error {
+	return p.publisher.PublishJSON(ctx, queue.SourceSyncRoutingKey, SourceSyncMessage{
+		EventID:         uuid.NewString(),
+		Type:            TypeSourceSync,
+		SourceID:        sourceID,
+		UserID:          userID,
+		KnowledgeBaseID: knowledgeBaseID,
+		Attempt:         0,
+		CreatedAt:       time.Now(),
+	})
+}

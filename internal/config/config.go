@@ -21,6 +21,7 @@ type Config struct {
 	Search SearchConfig    `yaml:"search" mapstructure:"search"`
 	Rabbit RabbitMQConfig  `yaml:"rabbitmq" mapstructure:"rabbitmq"`
 	Web    WebSearchConfig `yaml:"web_search" mapstructure:"web_search"`
+	OAuth  OAuthConfig     `yaml:"oauth" mapstructure:"oauth"`
 }
 
 type ServerConfig struct {
@@ -96,10 +97,12 @@ type RabbitMQConfig struct {
 	Exchange          string `yaml:"exchange" mapstructure:"exchange"`
 	IndexQueue        string `yaml:"index_queue" mapstructure:"index_queue"`
 	DeleteQueue       string `yaml:"delete_queue" mapstructure:"delete_queue"`
+	SourceSyncQueue   string `yaml:"source_sync_queue" mapstructure:"source_sync_queue"`
 	RetryDelaySeconds int    `yaml:"retry_delay_seconds" mapstructure:"retry_delay_seconds"`
 	MaxRetries        int    `yaml:"max_retries" mapstructure:"max_retries"`
 	IndexWorkers      int    `yaml:"index_workers" mapstructure:"index_workers"`
 	DeleteWorkers     int    `yaml:"delete_workers" mapstructure:"delete_workers"`
+	SourceSyncWorkers int    `yaml:"source_sync_workers" mapstructure:"source_sync_workers"`
 	PrefetchCount     int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
 }
 
@@ -113,6 +116,16 @@ type WebSearchConfig struct {
 	TimeoutSeconds int    `yaml:"timeout_seconds" mapstructure:"timeout_seconds"`
 	EnableSource   bool   `yaml:"enable_source" mapstructure:"enable_source"`
 	Disclaimer     string `yaml:"disclaimer" mapstructure:"disclaimer"`
+}
+
+type OAuthConfig struct {
+	Notion NotionOAuthConfig `yaml:"notion" mapstructure:"notion"`
+}
+
+type NotionOAuthConfig struct {
+	ClientID     string `yaml:"client_id" mapstructure:"client_id"`
+	ClientSecret string `yaml:"client_secret" mapstructure:"client_secret"`
+	RedirectURL  string `yaml:"redirect_url" mapstructure:"redirect_url"`
 }
 
 // Load 读取并初始化应用配置
@@ -175,10 +188,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.exchange", "ouragent.tasks")
 	v.SetDefault("rabbitmq.index_queue", "ouragent.document.index")
 	v.SetDefault("rabbitmq.delete_queue", "ouragent.document.delete.cleanup")
+	v.SetDefault("rabbitmq.source_sync_queue", "ouragent.source.sync")
 	v.SetDefault("rabbitmq.retry_delay_seconds", 30)
 	v.SetDefault("rabbitmq.max_retries", 5)
 	v.SetDefault("rabbitmq.index_workers", 2)
 	v.SetDefault("rabbitmq.delete_workers", 2)
+	v.SetDefault("rabbitmq.source_sync_workers", 1)
 	v.SetDefault("rabbitmq.prefetch_count", 1)
 	v.SetDefault("web_search.enabled", true)
 	v.SetDefault("web_search.fallback_only", true)
@@ -187,6 +202,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("web_search.model", "qwen3.6-flash")
 	v.SetDefault("web_search.timeout_seconds", 60)
 	v.SetDefault("web_search.enable_source", true)
+	v.SetDefault("oauth.notion.redirect_url", "http://localhost:8080/api/v1/oauth/notion/callback")
 	v.SetDefault("web_search.disclaimer", "当前知识库没有找到足够信息，以下内容基于联网搜索结果生成，仅供参考。网络资料可能不准确、过期或与实际情况不一致。")
 }
 
@@ -223,10 +239,12 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rabbitmq.exchange", "RABBITMQ_EXCHANGE")
 	_ = v.BindEnv("rabbitmq.index_queue", "RABBITMQ_INDEX_QUEUE")
 	_ = v.BindEnv("rabbitmq.delete_queue", "RABBITMQ_DELETE_QUEUE")
+	_ = v.BindEnv("rabbitmq.source_sync_queue", "RABBITMQ_SOURCE_SYNC_QUEUE")
 	_ = v.BindEnv("rabbitmq.retry_delay_seconds", "RABBITMQ_RETRY_DELAY_SECONDS")
 	_ = v.BindEnv("rabbitmq.max_retries", "RABBITMQ_MAX_RETRIES")
 	_ = v.BindEnv("rabbitmq.index_workers", "RABBITMQ_INDEX_WORKERS")
 	_ = v.BindEnv("rabbitmq.delete_workers", "RABBITMQ_DELETE_WORKERS")
+	_ = v.BindEnv("rabbitmq.source_sync_workers", "RABBITMQ_SOURCE_SYNC_WORKERS")
 	_ = v.BindEnv("rabbitmq.prefetch_count", "RABBITMQ_PREFETCH_COUNT")
 	_ = v.BindEnv("web_search.enabled", "WEB_SEARCH_ENABLED")
 	_ = v.BindEnv("web_search.fallback_only", "WEB_SEARCH_FALLBACK_ONLY")
@@ -237,6 +255,9 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("web_search.timeout_seconds", "WEB_SEARCH_TIMEOUT_SECONDS")
 	_ = v.BindEnv("web_search.enable_source", "WEB_SEARCH_ENABLE_SOURCE")
 	_ = v.BindEnv("web_search.disclaimer", "WEB_SEARCH_DISCLAIMER")
+	_ = v.BindEnv("oauth.notion.client_id", "NOTION_CLIENT_ID")
+	_ = v.BindEnv("oauth.notion.client_secret", "NOTION_CLIENT_SECRET")
+	_ = v.BindEnv("oauth.notion.redirect_url", "NOTION_REDIRECT_URL")
 }
 
 func applyDefaults(cfg *Config) {
@@ -312,6 +333,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Rabbit.DeleteQueue == "" {
 		cfg.Rabbit.DeleteQueue = "ouragent.document.delete.cleanup"
 	}
+	if cfg.Rabbit.SourceSyncQueue == "" {
+		cfg.Rabbit.SourceSyncQueue = "ouragent.source.sync"
+	}
 	if cfg.Rabbit.RetryDelaySeconds <= 0 {
 		cfg.Rabbit.RetryDelaySeconds = 30
 	}
@@ -323,6 +347,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Rabbit.DeleteWorkers <= 0 {
 		cfg.Rabbit.DeleteWorkers = 2
+	}
+	if cfg.Rabbit.SourceSyncWorkers <= 0 {
+		cfg.Rabbit.SourceSyncWorkers = 1
 	}
 	if cfg.Rabbit.PrefetchCount <= 0 {
 		cfg.Rabbit.PrefetchCount = 1
@@ -344,6 +371,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Web.Disclaimer == "" {
 		cfg.Web.Disclaimer = "当前知识库没有找到足够信息，以下内容基于联网搜索结果生成，仅供参考。网络资料可能不准确、过期或与实际情况不一致。"
+	}
+	if cfg.OAuth.Notion.RedirectURL == "" {
+		cfg.OAuth.Notion.RedirectURL = "http://localhost:8080/api/v1/oauth/notion/callback"
 	}
 }
 
@@ -371,8 +401,12 @@ func expandEnv(cfg *Config) {
 	cfg.Rabbit.Exchange = os.ExpandEnv(cfg.Rabbit.Exchange)
 	cfg.Rabbit.IndexQueue = os.ExpandEnv(cfg.Rabbit.IndexQueue)
 	cfg.Rabbit.DeleteQueue = os.ExpandEnv(cfg.Rabbit.DeleteQueue)
+	cfg.Rabbit.SourceSyncQueue = os.ExpandEnv(cfg.Rabbit.SourceSyncQueue)
 	cfg.Web.Endpoint = os.ExpandEnv(cfg.Web.Endpoint)
 	cfg.Web.APIKey = os.ExpandEnv(cfg.Web.APIKey)
 	cfg.Web.Model = os.ExpandEnv(cfg.Web.Model)
 	cfg.Web.Disclaimer = os.ExpandEnv(cfg.Web.Disclaimer)
+	cfg.OAuth.Notion.ClientID = os.ExpandEnv(cfg.OAuth.Notion.ClientID)
+	cfg.OAuth.Notion.ClientSecret = os.ExpandEnv(cfg.OAuth.Notion.ClientSecret)
+	cfg.OAuth.Notion.RedirectURL = os.ExpandEnv(cfg.OAuth.Notion.RedirectURL)
 }

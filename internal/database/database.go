@@ -17,6 +17,8 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{},
 		&model.KnowledgeBase{},
+		&model.KnowledgeSource{},
+		&model.ExternalDocument{},
 		&model.Document{},
 		&model.DocumentParentChunk{},
 		&model.DocumentChildChunk{},
