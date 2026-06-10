@@ -91,6 +91,18 @@ func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	return &ChatResponse{Answer: prepared.Answer, Sources: prepared.Sources, ChatLogID: logID}, nil
 }
 
+// PrepareKnowledgeAnswer执行纯知识库RAG回答
+func (s *ChatService) PrepareKnowledgeAnswer(ctx context.Context, req ChatRequest) (*rag.PreparedChat, error) {
+	resolved, prepared, err := s.validate(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if prepared != nil {
+		return prepared, nil
+	}
+	return s.chain.Invoke(ctx, resolved)
+}
+
 // Stream执行知识库检索并流式生成回答
 func (s *ChatService) Stream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	start := time.Now()
@@ -377,8 +389,16 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 }
 
 func (s *ChatService) saveLog(prepared *rag.PreparedChat, start time.Time) (uint64, error) {
+	return s.saveLogWithAgent(prepared, start, nil, "")
+}
+
+func (s *ChatService) saveLogWithAgent(prepared *rag.PreparedChat, start time.Time, agentTrace interface{}, answerMode string) (uint64, error) {
 	rawSources, _ := json.Marshal(prepared.Sources)
 	rawTrace, _ := json.Marshal(prepared.Trace)
+	var rawAgentTrace []byte
+	if agentTrace != nil {
+		rawAgentTrace, _ = json.Marshal(agentTrace)
+	}
 	log := model.ChatLog{
 		KnowledgeBaseID:  prepared.Request.KnowledgeBaseID,
 		UserID:           prepared.Request.UserID,
@@ -386,6 +406,8 @@ func (s *ChatService) saveLog(prepared *rag.PreparedChat, start time.Time) (uint
 		Answer:           prepared.Answer,
 		RetrievedChunks:  datatypes.JSON(rawSources),
 		RetrievalTrace:   datatypes.JSON(rawTrace),
+		AgentTrace:       datatypes.JSON(rawAgentTrace),
+		AnswerMode:       answerMode,
 		PromptPreview:    prepared.PromptPreview,
 		ModelName:        s.chain.ModelName(),
 		PromptTokens:     prepared.PromptTokens,

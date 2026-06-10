@@ -137,6 +137,8 @@ type ChatLog struct {
 	Answer           string         `gorm:"type:longtext;not null" json:"answer"`
 	RetrievedChunks  datatypes.JSON `gorm:"type:json" json:"retrieved_chunks"`
 	RetrievalTrace   datatypes.JSON `gorm:"type:json" json:"retrieval_trace"`
+	AgentTrace       datatypes.JSON `gorm:"type:json" json:"agent_trace"`
+	AnswerMode       string         `gorm:"size:64" json:"answer_mode"`
 	PromptPreview    string         `gorm:"type:text" json:"prompt_preview"`
 	ModelName        string         `gorm:"size:100" json:"model_name"`
 	PromptTokens     int            `json:"prompt_tokens"`

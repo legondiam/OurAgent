@@ -128,6 +128,7 @@ func main() {
 	sourceHandler := handler.NewSourceHandler(sourceService)
 	oauthHandler := handler.NewOAuthHandler(appoauth.NewNotionService(cfg.OAuth.Notion, cfg.JWT.Secret, sourceRepo))
 	chatHandler := handler.NewChatHandler(chatService)
+	agentHandler := handler.NewAgentHandler(service.NewAgentService(chatService))
 
 	r := router.New(router.Dependencies{
 		JWTSecret:       cfg.JWT.Secret,
@@ -135,6 +136,7 @@ func main() {
 		KBHandler:       kbHandler,
 		DocumentHandler: documentHandler,
 		ChatHandler:     chatHandler,
+		AgentHandler:    agentHandler,
 		SourceHandler:   sourceHandler,
 		OAuthHandler:    oauthHandler,
 	})

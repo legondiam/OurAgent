@@ -13,6 +13,7 @@ type Dependencies struct {
 	KBHandler       *handler.KnowledgeBaseHandler
 	DocumentHandler *handler.DocumentHandler
 	ChatHandler     *handler.ChatHandler
+	AgentHandler    *handler.AgentHandler
 	SourceHandler   *handler.SourceHandler
 	OAuthHandler    *handler.OAuthHandler
 }
@@ -58,6 +59,7 @@ func registerProtectedRoutes(api *gin.RouterGroup, deps Dependencies) {
 	protected.GET("/oauth/notion/authorize", deps.OAuthHandler.NotionAuthorize)
 	protected.POST("/knowledge-bases/:id/chat", deps.ChatHandler.Chat)
 	protected.POST("/knowledge-bases/:id/chat/stream", deps.ChatHandler.Stream)
+	protected.POST("/knowledge-bases/:id/agent/chat", deps.AgentHandler.Chat)
 	protected.GET("/chat-logs", deps.ChatHandler.ListLogs)
 	protected.POST("/chat-logs/:id/feedback", deps.ChatHandler.Feedback)
 }
