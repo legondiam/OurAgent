@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"strings"
 
 	"OurAgent/internal/model"
 
@@ -54,7 +55,9 @@ type RetrievedChunk struct {
 type Request struct {
 	UserID                      uint64
 	KnowledgeBaseID             uint64
+	ConversationID              string
 	Question                    string
+	SearchQuery                 string
 	TopK                        int
 	ScoreThreshold              float64
 	MaxContextTokens            int
@@ -70,6 +73,13 @@ type Request struct {
 	RerankCandidateLimit        int
 	RerankTopN                  int
 	WebSearch                   bool
+}
+
+func (r Request) EffectiveSearchQuery() string {
+	if strings.TrimSpace(r.SearchQuery) != "" {
+		return strings.TrimSpace(r.SearchQuery)
+	}
+	return r.Question
 }
 
 type PreparedChat struct {
@@ -162,7 +172,7 @@ type TraceQuery struct {
 
 func NewTrace(req Request, rejectReason string) RetrievalTrace {
 	return RetrievalTrace{
-		Query:            req.Question,
+		Query:            req.EffectiveSearchQuery(),
 		TopK:             req.TopK,
 		ScoreThreshold:   req.ScoreThreshold,
 		MaxContextTokens: req.MaxContextTokens,

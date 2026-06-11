@@ -16,7 +16,8 @@ type AgentHandler struct {
 }
 
 type agentChatRequest struct {
-	Question string `json:"question" binding:"required"`
+	ConversationID string `json:"conversation_id"`
+	Question       string `json:"question" binding:"required"`
 }
 
 func NewAgentHandler(service *service.AgentService) *AgentHandler {
@@ -46,6 +47,7 @@ func (h *AgentHandler) Chat(c *gin.Context) {
 	resp, err := h.service.Chat(ctx, service.AgentChatRequest{
 		UserID:          userID,
 		KnowledgeBaseID: kbID,
+		ConversationID:  req.ConversationID,
 		Question:        req.Question,
 	})
 	if err != nil {

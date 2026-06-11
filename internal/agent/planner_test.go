@@ -7,7 +7,7 @@ import (
 )
 
 func TestPlannerClarifyAfterRAGForVagueQuestion(t *testing.T) {
-	planner := NewPlanner()
+	planner := NewPostRAGPlanner()
 	decision := planner.ClarifyAfterRAG("这个流程怎么走", rag.RetrievalTrace{
 		UsedChunkCount: 0,
 		RewrittenQueries: []rag.TraceQuery{
@@ -20,7 +20,7 @@ func TestPlannerClarifyAfterRAGForVagueQuestion(t *testing.T) {
 }
 
 func TestPlannerDoesNotClarifyWhenQuestionHasObject(t *testing.T) {
-	planner := NewPlanner()
+	planner := NewPostRAGPlanner()
 	decision := planner.ClarifyAfterRAG("报销这个流程怎么走", rag.RetrievalTrace{
 		UsedChunkCount: 0,
 		RewrittenQueries: []rag.TraceQuery{
@@ -33,7 +33,7 @@ func TestPlannerDoesNotClarifyWhenQuestionHasObject(t *testing.T) {
 }
 
 func TestPlannerDoesNotClarifyWhenChunkUsed(t *testing.T) {
-	planner := NewPlanner()
+	planner := NewPostRAGPlanner()
 	decision := planner.ClarifyAfterRAG("这个流程怎么走", rag.RetrievalTrace{
 		UsedChunkCount: 1,
 	})

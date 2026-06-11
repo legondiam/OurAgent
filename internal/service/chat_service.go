@@ -32,8 +32,17 @@ type ChatService struct {
 type ChatRequest struct {
 	UserID          uint64
 	KnowledgeBaseID uint64
+	ConversationID  string
 	Question        string
 	WebSearch       bool
+}
+
+type KnowledgeSearchOptions struct {
+	QueryRewrite *bool
+	Hybrid       *bool
+	Rerank       *bool
+	TopK         int
+	Query        string
 }
 
 type ChatResponse struct {
@@ -93,6 +102,11 @@ func (s *ChatService) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 
 // PrepareKnowledgeAnswer执行纯知识库RAG回答
 func (s *ChatService) PrepareKnowledgeAnswer(ctx context.Context, req ChatRequest) (*rag.PreparedChat, error) {
+	return s.PrepareKnowledgeAnswerWithOptions(ctx, req, KnowledgeSearchOptions{})
+}
+
+// PrepareKnowledgeAnswerWithOptions按指定计划执行纯知识库RAG回答
+func (s *ChatService) PrepareKnowledgeAnswerWithOptions(ctx context.Context, req ChatRequest, opts KnowledgeSearchOptions) (*rag.PreparedChat, error) {
 	resolved, prepared, err := s.validate(ctx, req)
 	if err != nil {
 		return nil, err
@@ -100,6 +114,7 @@ func (s *ChatService) PrepareKnowledgeAnswer(ctx context.Context, req ChatReques
 	if prepared != nil {
 		return prepared, nil
 	}
+	applyKnowledgeSearchOptions(&resolved, opts)
 	return s.chain.Invoke(ctx, resolved)
 }
 
@@ -231,17 +246,9 @@ func (s *ChatService) SubmitFeedback(input FeedbackInput) (*model.ChatFeedback, 
 }
 
 func (s *ChatService) validate(ctx context.Context, req ChatRequest) (rag.Request, *rag.PreparedChat, error) {
-	resolved, err := s.resolveRequest(req)
+	resolved, err := s.authorizeRequest(ctx, req)
 	if err != nil {
 		return rag.Request{}, nil, err
-	}
-
-	exists, err := s.kbs.ExistsByIDAndUserID(resolved.KnowledgeBaseID, resolved.UserID)
-	if err != nil {
-		return rag.Request{}, nil, pkgerrors.WithMessage(err, "查询知识库失败")
-	}
-	if !exists {
-		return rag.Request{}, nil, pkgerrors.WithStack(ErrKnowledgeBaseNotFound)
 	}
 
 	completedDocs, err := s.docs.CountCompleted(resolved.UserID, resolved.KnowledgeBaseID)
@@ -254,6 +261,22 @@ func (s *ChatService) validate(ctx context.Context, req ChatRequest) (rag.Reques
 	}
 
 	return resolved, nil, nil
+}
+
+func (s *ChatService) authorizeRequest(_ context.Context, req ChatRequest) (rag.Request, error) {
+	resolved, err := s.resolveRequest(req)
+	if err != nil {
+		return rag.Request{}, err
+	}
+
+	exists, err := s.kbs.ExistsByIDAndUserID(resolved.KnowledgeBaseID, resolved.UserID)
+	if err != nil {
+		return rag.Request{}, pkgerrors.WithMessage(err, "查询知识库失败")
+	}
+	if !exists {
+		return rag.Request{}, pkgerrors.WithStack(ErrKnowledgeBaseNotFound)
+	}
+	return resolved, nil
 }
 
 // applyWebFallback在知识库拒答时尝试联网降级
@@ -369,6 +392,7 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	return rag.Request{
 		UserID:                      req.UserID,
 		KnowledgeBaseID:             req.KnowledgeBaseID,
+		ConversationID:              strings.TrimSpace(req.ConversationID),
 		Question:                    req.Question,
 		TopK:                        topK,
 		ScoreThreshold:              scoreThreshold,
@@ -388,6 +412,28 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 	}, nil
 }
 
+func applyKnowledgeSearchOptions(req *rag.Request, opts KnowledgeSearchOptions) {
+	query := strings.TrimSpace(opts.Query)
+	if query != "" {
+		req.SearchQuery = query
+	}
+	if opts.TopK > 0 {
+		req.TopK = opts.TopK
+	}
+	if req.TopK > 20 {
+		req.TopK = 20
+	}
+	if opts.QueryRewrite != nil {
+		req.QueryRewrite = *opts.QueryRewrite
+	}
+	if opts.Hybrid != nil {
+		req.HybridEnabled = *opts.Hybrid
+	}
+	if opts.Rerank != nil {
+		req.Rerank = *opts.Rerank
+	}
+}
+
 func (s *ChatService) saveLog(prepared *rag.PreparedChat, start time.Time) (uint64, error) {
 	return s.saveLogWithAgent(prepared, start, nil, "")
 }
@@ -402,6 +448,7 @@ func (s *ChatService) saveLogWithAgent(prepared *rag.PreparedChat, start time.Ti
 	log := model.ChatLog{
 		KnowledgeBaseID:  prepared.Request.KnowledgeBaseID,
 		UserID:           prepared.Request.UserID,
+		ConversationID:   prepared.Request.ConversationID,
 		Question:         prepared.Request.Question,
 		Answer:           prepared.Answer,
 		RetrievedChunks:  datatypes.JSON(rawSources),

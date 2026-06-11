@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"OurAgent/internal/agent"
 	"OurAgent/internal/config"
 	"OurAgent/internal/database"
 	"OurAgent/internal/document"
@@ -128,7 +129,8 @@ func main() {
 	sourceHandler := handler.NewSourceHandler(sourceService)
 	oauthHandler := handler.NewOAuthHandler(appoauth.NewNotionService(cfg.OAuth.Notion, cfg.JWT.Secret, sourceRepo))
 	chatHandler := handler.NewChatHandler(chatService)
-	agentHandler := handler.NewAgentHandler(service.NewAgentService(chatService))
+	agentPlanner := agent.NewLLMPlanner(rewriteChatModel)
+	agentHandler := handler.NewAgentHandler(service.NewAgentService(chatService, agentPlanner))
 
 	r := router.New(router.Dependencies{
 		JWTSecret:       cfg.JWT.Secret,

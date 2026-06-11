@@ -12,6 +12,8 @@ const (
 
 	ToolKnowledgeSearch = "knowledge_search"
 	ToolWebSearch       = "web_search"
+	ToolAgentPlanner    = "agent_planner"
+	ToolContextLookup   = "context_lookup"
 
 	StatusSuccess       = "success"
 	StatusLowConfidence = "low_confidence"
@@ -20,12 +22,17 @@ const (
 )
 
 type Trace struct {
-	Intent       string `json:"intent"`
-	Plan         string `json:"plan"`
-	Steps        []Step `json:"steps"`
-	FinalMode    string `json:"final_mode"`
-	Clarify      string `json:"clarify,omitempty"`
-	RejectReason string `json:"reject_reason,omitempty"`
+	Intent          string    `json:"intent"`
+	Plan            string    `json:"plan"`
+	Steps           []Step    `json:"steps"`
+	FinalMode       string    `json:"final_mode"`
+	Clarify         string    `json:"clarify,omitempty"`
+	RejectReason    string    `json:"reject_reason,omitempty"`
+	PlannerDecision *Decision `json:"planner_decision,omitempty"`
+	PreRAGDecision  *Decision `json:"pre_rag_decision,omitempty"`
+	ContextDecision *Decision `json:"context_decision,omitempty"`
+	PostRAGDecision *Decision `json:"post_rag_decision,omitempty"`
+	PlannerError    string    `json:"planner_error,omitempty"`
 }
 
 type Step struct {
@@ -40,7 +47,7 @@ type Step struct {
 func NewTrace(intent string) Trace {
 	return Trace{
 		Intent: intent,
-		Plan:   "先查询知识库，低置信度时再决定澄清或联网补充",
+		Plan:   "先由Agent Router决策，知识库低置信度时再进行后置决策",
 		Steps:  []Step{},
 	}
 }
@@ -48,6 +55,88 @@ func NewTrace(intent string) Trace {
 // AddStep追加工具执行步骤
 func (t *Trace) AddStep(step Step) {
 	t.Steps = append(t.Steps, step)
+}
+
+// MarkPlannerDecision记录Planner结构化决策
+func (t *Trace) MarkPlannerDecision(decision Decision) {
+	t.PlannerDecision = &decision
+	t.PreRAGDecision = &decision
+	t.AddStep(Step{
+		Tool:   ToolAgentPlanner,
+		Action: "pre_rag_plan",
+		Status: StatusSuccess,
+		Reason: decision.Reason,
+		Metadata: map[string]any{
+			"decision_action": string(decision.Action),
+			"planned_query":   decision.SearchPlan.Query,
+		},
+	})
+}
+
+// MarkPostRAGDecision记录低置信度后的Planner决策
+func (t *Trace) MarkPostRAGDecision(decision Decision) {
+	t.PostRAGDecision = &decision
+	t.AddStep(Step{
+		Tool:   ToolAgentPlanner,
+		Action: "post_rag_plan",
+		Status: StatusSuccess,
+		Reason: decision.Reason,
+		Metadata: map[string]any{
+			"decision_action": string(decision.Action),
+		},
+	})
+}
+
+// MarkContextResolvedDecision记录读取上下文后的Planner决策
+func (t *Trace) MarkContextResolvedDecision(decision Decision) {
+	t.ContextDecision = &decision
+	t.AddStep(Step{
+		Tool:   ToolAgentPlanner,
+		Action: "context_resolved_plan",
+		Status: StatusSuccess,
+		Reason: decision.Reason,
+		Metadata: map[string]any{
+			"decision_action": string(decision.Action),
+			"planned_query":   decision.SearchPlan.Query,
+		},
+	})
+}
+
+// MarkContextLookup记录会话上下文工具调用
+func (t *Trace) MarkContextLookup(conversationID string, historyCount int, err error) {
+	status := StatusSuccess
+	reason := ""
+	if err != nil {
+		status = StatusError
+		reason = err.Error()
+	} else if historyCount == 0 {
+		status = StatusSkipped
+		reason = "没有可用会话历史"
+	}
+	t.AddStep(Step{
+		Tool:   ToolContextLookup,
+		Action: "lookup",
+		Status: status,
+		Reason: reason,
+		Metadata: map[string]any{
+			"conversation_id": conversationID,
+			"history_count":   historyCount,
+		},
+	})
+}
+
+// MarkPlannerError记录Planner失败原因
+func (t *Trace) MarkPlannerError(err error) {
+	if err == nil {
+		return
+	}
+	t.PlannerError = err.Error()
+	t.AddStep(Step{
+		Tool:   ToolAgentPlanner,
+		Action: "plan_error",
+		Status: StatusError,
+		Reason: err.Error(),
+	})
 }
 
 // MarkClarify标记最终结果为澄清追问

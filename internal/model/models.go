@@ -133,6 +133,7 @@ type ChatLog struct {
 	ID               uint64         `gorm:"primaryKey" json:"id"`
 	KnowledgeBaseID  uint64         `gorm:"index;not null" json:"knowledge_base_id"`
 	UserID           uint64         `gorm:"index;not null" json:"user_id"`
+	ConversationID   string         `gorm:"size:64;index" json:"conversation_id"`
 	Question         string         `gorm:"type:text;not null" json:"question"`
 	Answer           string         `gorm:"type:longtext;not null" json:"answer"`
 	RetrievedChunks  datatypes.JSON `gorm:"type:json" json:"retrieved_chunks"`

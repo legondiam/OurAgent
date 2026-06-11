@@ -1,13 +1,68 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"unicode"
 
 	"OurAgent/internal/rag"
 )
 
-type Planner struct{}
+type Planner interface {
+	Plan(ctx context.Context, input PlannerInput) (Decision, error)
+}
+
+type PlannerStage string
+
+const (
+	PlannerStagePreRAG          PlannerStage = "pre_rag"
+	PlannerStageContextResolved PlannerStage = "context_resolved"
+	PlannerStagePostRAG         PlannerStage = "post_rag"
+)
+
+type PlannerInput struct {
+	Stage        PlannerStage
+	UserQuestion string
+	Tools        []ToolSpec
+	WebEnabled   bool
+	Observation  *RetrievalObservation
+	Context      *ConversationContext
+}
+
+type ToolSpec struct {
+	Name        string
+	Description string
+}
+
+type RetrievalObservation struct {
+	SearchQuery      string
+	RewrittenQueries []string
+	UsedChunkCount   int
+	RejectReason     string
+	TopHits          []RetrievalHitSummary
+}
+
+type RetrievalHitSummary struct {
+	DocumentName string
+	SectionPath  string
+	Score        float64
+	Used         bool
+	Reason       string
+}
+
+type ConversationContext struct {
+	ConversationID string
+	Messages       []HistoryMessage
+}
+
+type HistoryMessage struct {
+	Question string
+	Answer   string
+}
+
+type PostRAGPlanner struct{}
+
+type FallbackPlanner struct{}
 
 type ClarifyDecision struct {
 	NeedClarify bool
@@ -15,13 +70,26 @@ type ClarifyDecision struct {
 	Reason      string
 }
 
-// NewPlanner创建轻量Agent规划器
-func NewPlanner() *Planner {
-	return &Planner{}
+// NewPostRAGPlanner创建RAG后置规划器
+func NewPostRAGPlanner() *PostRAGPlanner {
+	return &PostRAGPlanner{}
+}
+
+// NewFallbackPlanner创建知识库检索兜底Planner
+func NewFallbackPlanner() *FallbackPlanner {
+	return &FallbackPlanner{}
+}
+
+// Plan返回默认知识库检索决策
+func (p *FallbackPlanner) Plan(_ context.Context, input PlannerInput) (Decision, error) {
+	if input.Stage == PlannerStagePostRAG {
+		return DefaultPostRAGDecision(input.UserQuestion, input.WebEnabled), nil
+	}
+	return DefaultKnowledgeSearchDecision(input.UserQuestion, SearchPlan{}), nil
 }
 
 // ClarifyAfterRAG在RAG低置信度后判断是否追问
-func (p *Planner) ClarifyAfterRAG(question string, trace rag.RetrievalTrace) ClarifyDecision {
+func (p *PostRAGPlanner) ClarifyAfterRAG(question string, trace rag.RetrievalTrace) ClarifyDecision {
 	if trace.UsedChunkCount > 0 {
 		return ClarifyDecision{}
 	}

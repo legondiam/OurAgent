@@ -20,8 +20,9 @@ func NewChatHandler(service *service.ChatService) *ChatHandler {
 }
 
 type chatRequest struct {
-	Question  string `json:"question" binding:"required"`
-	WebSearch bool   `json:"web_search"`
+	ConversationID string `json:"conversation_id"`
+	Question       string `json:"question" binding:"required"`
+	WebSearch      bool   `json:"web_search"`
 }
 
 type feedbackRequest struct {
@@ -52,6 +53,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 	resp, err := h.service.Chat(ctx, service.ChatRequest{
 		UserID:          userID,
 		KnowledgeBaseID: kbID,
+		ConversationID:  req.ConversationID,
 		Question:        req.Question,
 		WebSearch:       req.WebSearch,
 	})
@@ -84,6 +86,7 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 	events, err := h.service.Stream(ctx, service.ChatRequest{
 		UserID:          userID,
 		KnowledgeBaseID: kbID,
+		ConversationID:  req.ConversationID,
 		Question:        req.Question,
 		WebSearch:       req.WebSearch,
 	})

@@ -120,6 +120,7 @@ func (c *RAGChain) ModelName() string {
 // queryRewriteNode 生成用于检索的query列表
 func (c *RAGChain) queryRewriteNode(ctx context.Context, req Request) (*chainState, error) {
 	trace := NewTrace(req, "")
+	searchQuery := req.EffectiveSearchQuery()
 
 	// 根据请求开关选择真实改写器或兜底改写器
 	rewriter := c.rewriter
@@ -131,7 +132,7 @@ func (c *RAGChain) queryRewriteNode(ctx context.Context, req Request) (*chainSta
 	result, err := rewriter.Rewrite(ctx, RewriteRequest{
 		UserID:          req.UserID,
 		KnowledgeBaseID: req.KnowledgeBaseID,
-		Question:        req.Question,
+		Question:        searchQuery,
 		MaxQueries:      req.QueryRewriteMaxQueries,
 		IncludeOriginal: req.QueryRewriteIncludeOriginal,
 	})
@@ -139,24 +140,25 @@ func (c *RAGChain) queryRewriteNode(ctx context.Context, req Request) (*chainSta
 		// 改写失败时记录trace，并退化为只用原问题检索
 		trace.RewriteError = err.Error()
 		result, _ = NewFallbackQueryRewriter().Rewrite(ctx, RewriteRequest{
-			Question:        req.Question,
+			Question:        searchQuery,
 			MaxQueries:      1,
 			IncludeOriginal: true,
 		})
 	}
 
 	// 规范化query列表，并写入trace用于排查检索来源
-	queries := normalizeRewriteResult(req.Question, result)
+	queries := normalizeRewriteResult(searchQuery, result)
 	trace.RewrittenQueries = traceQueries(queries)
 	return &chainState{req: req, queries: queries, trace: trace}, nil
 }
 
 // retrieveNode 执行多query检索并合并结果
 func (c *RAGChain) retrieveNode(ctx context.Context, state *chainState) (*chainState, error) {
+	searchQuery := state.req.EffectiveSearchQuery()
 	results, err := c.retriever.Retrieve(ctx, RetrieveRequest{
 		UserID:          state.req.UserID,
 		KnowledgeBaseID: state.req.KnowledgeBaseID,
-		Query:           state.req.Question,
+		Query:           searchQuery,
 		Queries:         state.queries,
 		TopK:            state.req.TopK,
 		BM25TopK:        state.req.BM25TopK,
@@ -206,7 +208,7 @@ func (c *RAGChain) rerankNode(ctx context.Context, state *chainState) (*chainSta
 
 	// 调用精排模型判断问题和候选切片的相关性
 	result, err := c.reranker.Rerank(ctx, RerankRequest{
-		Query: state.req.Question,
+		Query: state.req.EffectiveSearchQuery(),
 		Items: items,
 		TopN:  topN,
 	})

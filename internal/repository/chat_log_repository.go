@@ -33,6 +33,18 @@ func (r *ChatLogRepository) ListByUserID(userID uint64, limit int) ([]model.Chat
 	return logs, nil
 }
 
+// ListRecentByConversation查询会话最近问答日志
+func (r *ChatLogRepository) ListRecentByConversation(userID, knowledgeBaseID uint64, conversationID string, limit int) ([]model.ChatLog, error) {
+	var logs []model.ChatLog
+	if err := r.db.Where("user_id = ? AND knowledge_base_id = ? AND conversation_id = ?", userID, knowledgeBaseID, conversationID).
+		Order("created_at desc").
+		Limit(limit).
+		Find(&logs).Error; err != nil {
+		return nil, pkgerrors.WithMessage(err, "查询会话问答日志失败")
+	}
+	return logs, nil
+}
+
 // FindByIDAndUserID 查询用户问答日志
 func (r *ChatLogRepository) FindByIDAndUserID(id, userID uint64) (*model.ChatLog, error) {
 	var log model.ChatLog
