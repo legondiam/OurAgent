@@ -83,14 +83,17 @@ func buildPlannerPrompt(input PlannerInput) string {
 	b.WriteString(string(input.Stage))
 	b.WriteString("\n")
 	if input.Stage == PlannerStagePostRAG {
-		b.WriteString("知识库已经检索过一次，但结果低置信度。你只能选择clarify、web_search或reject，不要选择knowledge_search。\n\n")
+		b.WriteString("知识库已经检索过一次，但结果低置信度。你只能选择clarify、web_search或reject，不要选择knowledge_search或direct_answer。\n\n")
 	} else if input.Stage == PlannerStageContextResolved {
-		b.WriteString("已经读取会话历史。你只能选择clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
+		b.WriteString("已经读取会话历史。你只能选择direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
 		b.WriteString("如果选择knowledge_search，search_plan.query必须是结合会话历史后的独立完整问题。\n\n")
 	} else {
-		b.WriteString("你可以选择context_lookup、clarify、knowledge_search、web_search或reject。\n")
+		b.WriteString("你可以选择context_lookup、direct_answer、clarify、knowledge_search、web_search或reject。\n")
 		b.WriteString("如果当前问题明显依赖上文，且context_lookup可用，优先选择context_lookup。\n\n")
 	}
+	b.WriteString("direct_answer仅用于寒暄、通用知识解释、写作辅助、格式转换等不依赖企业知识库和实时网络信息的问题。\n")
+	b.WriteString("如果问题涉及企业内部制度、流程、文档、配置、权限、数据或需要来源依据，不要选择direct_answer。\n")
+	b.WriteString("如果问题涉及实时公开信息，不要选择direct_answer，应选择web_search。\n\n")
 	b.WriteString("用户问题：\n")
 	b.WriteString(input.UserQuestion)
 	b.WriteString("\n\n可用工具：\n")
@@ -129,7 +132,7 @@ func buildPlannerPrompt(input PlannerInput) string {
 
 请输出JSON：
 {
-  "action": "clarify | knowledge_search | web_search | reject",
+  "action": "direct_answer | clarify | knowledge_search | web_search | reject",
   "reason": "选择该动作的原因",
   "search_plan": {
     "query": "结合会话历史后的独立完整检索问题",
@@ -147,7 +150,7 @@ func buildPlannerPrompt(input PlannerInput) string {
 
 请输出JSON：
 {
-  "action": "context_lookup | clarify | knowledge_search | web_search | reject",
+  "action": "context_lookup | direct_answer | clarify | knowledge_search | web_search | reject",
   "reason": "选择该动作的原因",
   "search_plan": {
     "query": "用于检索知识库的query",

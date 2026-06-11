@@ -9,12 +9,15 @@ import (
 	"OurAgent/internal/rag"
 	"OurAgent/internal/websearch"
 
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 	pkgerrors "github.com/pkg/errors"
 )
 
 type AgentService struct {
 	chat        *ChatService
 	planner     agent.Planner
+	directChat  einomodel.BaseChatModel
 	postPlanner *agent.PostRAGPlanner
 }
 
@@ -44,11 +47,20 @@ const (
 	conversationMaxHistoryChars    = 3000
 )
 
+const directAnswerSystemPrompt = `你是企业知识库助手。
+当前问题已被Agent判断为不需要查询企业知识库，也不需要联网。
+请直接回答用户问题。
+
+要求：
+1. 不要编造企业内部制度、流程、文档或数据
+2. 如果问题实际涉及企业内部事实，请说明需要查询知识库
+3. 回答简洁清晰`
+
 // NewAgentService创建Agent服务
-func NewAgentService(chat *ChatService, planners ...agent.Planner) *AgentService {
-	var planner agent.Planner
-	if len(planners) > 0 {
-		planner = planners[0]
+func NewAgentService(chat *ChatService, planner agent.Planner, directChats ...einomodel.BaseChatModel) *AgentService {
+	var directChat einomodel.BaseChatModel
+	if len(directChats) > 0 {
+		directChat = directChats[0]
 	}
 	if planner == nil {
 		planner = agent.NewFallbackPlanner()
@@ -56,6 +68,7 @@ func NewAgentService(chat *ChatService, planners ...agent.Planner) *AgentService
 	return &AgentService{
 		chat:        chat,
 		planner:     planner,
+		directChat:  directChat,
 		postPlanner: agent.NewPostRAGPlanner(),
 	}
 }
@@ -90,6 +103,8 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		return s.answerClarify(resolved, decision, trace, start)
 	case agent.ActionReject:
 		return s.answerReject(resolved, decision, trace, start)
+	case agent.ActionDirectAnswer:
+		return s.runDirectAnswer(ctx, resolved, decision, &trace, start)
 	case agent.ActionWebSearch:
 		if !s.canUseWebSearch() {
 			trace.MarkRejected("联网搜索未启用或未被允许")
@@ -349,6 +364,59 @@ func (s *AgentService) runWebSearch(ctx context.Context, prepared *rag.PreparedC
 	return final, nil
 }
 
+// runDirectAnswer调用模型直接回答通用问题
+func (s *AgentService) runDirectAnswer(ctx context.Context, resolved rag.Request, decision agent.Decision, trace *agent.Trace, start time.Time) (*AgentChatResponse, error) {
+	if s.directChat == nil {
+		trace.AddStep(agent.Step{
+			Tool:   agent.ToolDirectAnswer,
+			Action: "invoke",
+			Status: agent.StatusError,
+			Reason: "直接回答模型未配置",
+		})
+		reject := agent.Decision{Action: agent.ActionReject, Reason: "直接回答模型未配置"}
+		return s.answerReject(resolved, reject, *trace, start)
+	}
+	resp, err := s.directChat.Generate(ctx, []*schema.Message{
+		schema.SystemMessage(directAnswerSystemPrompt),
+		schema.UserMessage(buildDirectAnswerPrompt(resolved.Question)),
+	})
+	if err != nil {
+		trace.AddStep(agent.Step{
+			Tool:   agent.ToolDirectAnswer,
+			Action: "invoke",
+			Status: agent.StatusError,
+			Reason: err.Error(),
+		})
+		reject := agent.Decision{Action: agent.ActionReject, Reason: "直接回答失败"}
+		return s.answerReject(resolved, reject, *trace, start)
+	}
+	answer := strings.TrimSpace(resp.Content)
+	if answer == "" {
+		trace.AddStep(agent.Step{
+			Tool:   agent.ToolDirectAnswer,
+			Action: "invoke",
+			Status: agent.StatusError,
+			Reason: "模型返回空回答",
+		})
+		reject := agent.Decision{Action: agent.ActionReject, Reason: "直接回答为空"}
+		return s.answerReject(resolved, reject, *trace, start)
+	}
+	trace.AddStep(agent.Step{
+		Tool:   agent.ToolDirectAnswer,
+		Action: "invoke",
+		Status: agent.StatusSuccess,
+		Reason: decision.Reason,
+	})
+	trace.FinalMode = agent.FinalModeDirectAnswer
+	prepared := &rag.PreparedChat{
+		Request: resolved,
+		Answer:  answer,
+		Sources: []rag.Source{},
+		Trace:   rag.NewTrace(resolved, decision.Reason),
+	}
+	return s.saveAgentResponse(prepared, *trace, start)
+}
+
 // answerClarify返回Planner澄清问题
 func (s *AgentService) answerClarify(resolved rag.Request, decision agent.Decision, trace agent.Trace, start time.Time) (*AgentChatResponse, error) {
 	trace.MarkClarify(decision.ClarifyQuestion)
@@ -400,6 +468,7 @@ func (s *AgentService) defaultSearchPlan(question string) agent.SearchPlan {
 // availableTools返回Planner可选择的工具
 func (s *AgentService) availableTools(conversationID string) []agent.ToolSpec {
 	tools := []agent.ToolSpec{
+		{Name: string(agent.ActionDirectAnswer), Description: "回答寒暄、通用知识解释、写作辅助或格式转换等不依赖知识库和联网的问题"},
 		{Name: string(agent.ActionClarify), Description: "问题缺少关键业务对象时先追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "查询企业知识库并基于来源回答"},
 		{Name: string(agent.ActionReject), Description: "问题不适合当前系统处理时拒答"},
@@ -418,6 +487,7 @@ func (s *AgentService) availableTools(conversationID string) []agent.ToolSpec {
 // availableFinalTools返回不含上下文工具的最终动作列表
 func (s *AgentService) availableFinalTools() []agent.ToolSpec {
 	tools := []agent.ToolSpec{
+		{Name: string(agent.ActionDirectAnswer), Description: "回答寒暄、通用知识解释、写作辅助或格式转换等不依赖知识库和联网的问题"},
 		{Name: string(agent.ActionClarify), Description: "问题缺少关键业务对象时先追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "查询企业知识库并基于来源回答"},
 		{Name: string(agent.ActionReject), Description: "问题不适合当前系统处理时拒答"},
@@ -536,6 +606,10 @@ func knowledgeSearchOptionsFromPlan(plan agent.SearchPlan) KnowledgeSearchOption
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func buildDirectAnswerPrompt(question string) string {
+	return "用户问题：\n" + strings.TrimSpace(question)
 }
 
 // saveAgentResponse保存Agent回答并组装响应

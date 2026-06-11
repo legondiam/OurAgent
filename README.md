@@ -17,7 +17,7 @@ OurAgent是一个面向企业知识库场景的Go后端服务，提供文档接�
 - DashScope兼容重排序
 - 严格RAG回答、来源引用和检索trace
 - 普通问答和SSE流式问答接口
-- Agentic RAG问答接口，支持LLM Router、会话上下文工具、检索规划、澄清、拒答和联网补充
+- Agentic RAG问答接口，支持LLM Router、直接回答、会话上下文工具、检索规划、澄清、拒答和联网补充
 - 问答日志和反馈接口
 - 知识库无答案时的联网搜索降级
 - RabbitMQ异步文档索引和删除清理任务
@@ -72,6 +72,7 @@ Gin API
   +-- Agent service
         |
         +-- Agent Router Planner
+        +-- DirectAnswerTool
         +-- ConversationContextTool
         +-- KnowledgeSearchTool
         +-- Post-RAG Planner
@@ -219,7 +220,8 @@ question
 ```text
 question
   -> Pre-RAG LLM Planner
-  -> context_lookup / clarify / knowledge_search / web_search / reject
+  -> direct_answer / context_lookup / clarify / knowledge_search / web_search / reject
+  -> optional DirectAnswerTool
   -> optional ConversationContextTool
   -> optional Context-Resolved LLM Planner
   -> KnowledgeSearchTool / WebSearchTool
@@ -227,9 +229,9 @@ question
   -> answer, sources, retrieval trace, agent trace
 ```
 
-Agent Router基于Eino ChatModel实现LLM Planner。Planner会在检索前判断用户问题是否需要读取会话上下文、澄清、查询知识库、直接联网或拒答；如果选择`context_lookup`，服务端会读取同一用户、同一知识库、同一`conversation_id`下最近几轮问答，再让Planner基于历史进行二次决策。二次决策阶段不允许再次选择`context_lookup`，避免循环。
+Agent Router基于Eino ChatModel实现LLM Planner。Planner会在检索前判断用户问题是否可以直接回答、是否需要读取会话上下文、澄清、查询知识库、直接联网或拒答。`direct_answer`仅用于寒暄、通用知识解释、写作辅助和格式转换等不依赖企业知识库和实时信息的问题，不返回知识库来源；如果选择`context_lookup`，服务端会读取同一用户、同一知识库、同一`conversation_id`下最近几轮问答，再让Planner基于历史进行二次决策。二次决策阶段不允许再次选择`context_lookup`，避免循环。
 
-如果选择知识库检索，Planner会生成有限的`SearchPlan`，控制检索query、topK、query rewrite、hybrid和rerank开关。代码侧会校验Planner输出，只执行白名单动作；知识库检索低置信度时会进入Post-RAG Planner，由Agent结合检索摘要决定澄清、联网补充或拒答。`AgentTrace`会记录Planner决策、上下文工具调用、知识库检索、联网搜索和最终回答模式。
+如果选择知识库检索，Planner会生成有限的`SearchPlan`，控制检索query、topK、query rewrite、hybrid和rerank开关。代码侧会校验Planner输出，只执行白名单动作；知识库检索低置信度时会进入Post-RAG Planner，由Agent结合检索摘要决定澄清、联网补充或拒答。`AgentTrace`会记录Planner决策、直接回答、上下文工具调用、知识库检索、联网搜索和最终回答模式。
 
 连续问答场景下，客户端可以传入`conversation_id`：
 

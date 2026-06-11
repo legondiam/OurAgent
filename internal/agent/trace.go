@@ -7,6 +7,7 @@ const (
 
 	FinalModeKnowledgeBase = "knowledge_base"
 	FinalModeWebFallback   = "web_fallback"
+	FinalModeDirectAnswer  = "direct_answer"
 	FinalModeClarify       = "clarify"
 	FinalModeRejected      = "rejected"
 
@@ -14,6 +15,7 @@ const (
 	ToolWebSearch       = "web_search"
 	ToolAgentPlanner    = "agent_planner"
 	ToolContextLookup   = "context_lookup"
+	ToolDirectAnswer    = "direct_answer"
 
 	StatusSuccess       = "success"
 	StatusLowConfidence = "low_confidence"

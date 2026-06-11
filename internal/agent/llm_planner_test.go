@@ -57,11 +57,17 @@ func TestBuildPlannerPromptForPreRAGContextLookup(t *testing.T) {
 		Tools:        []ToolSpec{{Name: string(ActionContextLookup), Description: "读取会话历史"}},
 	})
 
-	if !strings.Contains(prompt, `"action": "context_lookup | clarify | knowledge_search | web_search | reject"`) {
+	if !strings.Contains(prompt, `"action": "context_lookup | direct_answer | clarify | knowledge_search | web_search | reject"`) {
 		t.Fatal("expected context_lookup action schema")
 	}
 	if !strings.Contains(prompt, "优先选择context_lookup") {
 		t.Fatal("expected context lookup instruction")
+	}
+	if !strings.Contains(prompt, "direct_answer仅用于寒暄") {
+		t.Fatal("expected direct answer instruction")
+	}
+	if !strings.Contains(prompt, "不要选择direct_answer") {
+		t.Fatal("expected direct answer safety boundary")
 	}
 }
 
@@ -82,6 +88,9 @@ func TestBuildPlannerPromptForContextResolved(t *testing.T) {
 	}
 	if strings.Contains(prompt, `"action": "context_lookup`) {
 		t.Fatal("context_resolved prompt should not ask for context_lookup")
+	}
+	if !strings.Contains(prompt, `"action": "direct_answer | clarify | knowledge_search | web_search | reject"`) {
+		t.Fatal("expected direct_answer in context_resolved schema")
 	}
 	if !strings.Contains(prompt, "报销流程怎么走") {
 		t.Fatal("expected conversation history")

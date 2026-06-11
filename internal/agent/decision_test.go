@@ -122,3 +122,33 @@ func TestNormalizePostRAGBlocksContextLookup(t *testing.T) {
 		t.Fatalf("expected clarify, got %s", decision.Action)
 	}
 }
+
+func TestNormalizePreRAGAllowsDirectAnswer(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStagePreRAG, UserQuestion: "RAG是什么", WebEnabled: false}
+
+	decision := NormalizeDecision(Decision{Action: ActionDirectAnswer}, input, SearchPlan{})
+
+	if decision.Action != ActionDirectAnswer {
+		t.Fatalf("expected direct_answer, got %s", decision.Action)
+	}
+}
+
+func TestNormalizeContextResolvedAllowsDirectAnswer(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStageContextResolved, UserQuestion: "再简单点", WebEnabled: false}
+
+	decision := NormalizeDecision(Decision{Action: ActionDirectAnswer}, input, SearchPlan{})
+
+	if decision.Action != ActionDirectAnswer {
+		t.Fatalf("expected direct_answer, got %s", decision.Action)
+	}
+}
+
+func TestNormalizePostRAGBlocksDirectAnswer(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStagePostRAG, UserQuestion: "报销流程怎么走", WebEnabled: true}
+
+	decision := NormalizeDecision(Decision{Action: ActionDirectAnswer}, input, SearchPlan{})
+
+	if decision.Action != ActionClarify {
+		t.Fatalf("expected clarify, got %s", decision.Action)
+	}
+}

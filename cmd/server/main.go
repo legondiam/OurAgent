@@ -130,7 +130,7 @@ func main() {
 	oauthHandler := handler.NewOAuthHandler(appoauth.NewNotionService(cfg.OAuth.Notion, cfg.JWT.Secret, sourceRepo))
 	chatHandler := handler.NewChatHandler(chatService)
 	agentPlanner := agent.NewLLMPlanner(rewriteChatModel)
-	agentHandler := handler.NewAgentHandler(service.NewAgentService(chatService, agentPlanner))
+	agentHandler := handler.NewAgentHandler(service.NewAgentService(chatService, agentPlanner, chatModel))
 
 	r := router.New(router.Dependencies{
 		JWTSecret:       cfg.JWT.Secret,
