@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"OurAgent/internal/model"
 
 	pkgerrors "github.com/pkg/errors"
@@ -43,6 +45,20 @@ func (r *ChatLogRepository) ListRecentByConversation(userID, knowledgeBaseID uin
 		return nil, pkgerrors.WithMessage(err, "查询会话问答日志失败")
 	}
 	return logs, nil
+}
+
+// FindLatestByConversation 查询会话最近一条问答日志
+func (r *ChatLogRepository) FindLatestByConversation(userID, knowledgeBaseID uint64, conversationID string) (*model.ChatLog, error) {
+	var log model.ChatLog
+	if err := r.db.Where("user_id = ? AND knowledge_base_id = ? AND conversation_id = ?", userID, knowledgeBaseID, conversationID).
+		Order("created_at desc").
+		First(&log).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, pkgerrors.WithMessage(err, "查询会话最近问答日志失败")
+	}
+	return &log, nil
 }
 
 // FindByIDAndUserID 查询用户问答日志

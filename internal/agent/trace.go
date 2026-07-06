@@ -27,6 +27,7 @@ const (
 type Trace struct {
 	Intent          string    `json:"intent"`
 	Plan            string    `json:"plan"`
+	ConversationID  string    `json:"conversation_id,omitempty"`
 	Steps           []Step    `json:"steps"`
 	FinalMode       string    `json:"final_mode"`
 	Clarify         string    `json:"clarify,omitempty"`

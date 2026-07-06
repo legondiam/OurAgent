@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"OurAgent/internal/agent"
+	"OurAgent/internal/model"
 	"OurAgent/internal/rag"
 	"OurAgent/internal/websearch"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/google/uuid"
 	pkgerrors "github.com/pkg/errors"
 )
 
@@ -29,11 +31,12 @@ type AgentChatRequest struct {
 }
 
 type AgentChatResponse struct {
-	Answer     string             `json:"answer"`
-	Sources    []rag.Source       `json:"sources"`
-	Trace      rag.RetrievalTrace `json:"trace"`
-	AgentTrace agent.Trace        `json:"agent_trace"`
-	ChatLogID  uint64             `json:"chat_log_id"`
+	ConversationID string             `json:"conversation_id"`
+	Answer         string             `json:"answer"`
+	Sources        []rag.Source       `json:"sources"`
+	Trace          rag.RetrievalTrace `json:"trace"`
+	AgentTrace     agent.Trace        `json:"agent_trace"`
+	ChatLogID      uint64             `json:"chat_log_id"`
 }
 
 type ContextLookupResult struct {
@@ -77,10 +80,18 @@ func NewAgentService(chat *ChatService, planner agent.Planner, directChats ...ei
 func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentChatResponse, error) {
 	start := time.Now()
 	trace := agent.NewTrace(agent.IntentKnowledgeQA)
+
+	conversationID, latest, err := s.resolveConversation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	req.ConversationID = conversationID
+	trace.ConversationID = conversationID
+
 	chatReq := ChatRequest{
 		UserID:          req.UserID,
 		KnowledgeBaseID: req.KnowledgeBaseID,
-		ConversationID:  req.ConversationID,
+		ConversationID:  conversationID,
 		Question:        req.Question,
 	}
 
@@ -90,12 +101,22 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		return nil, err
 	}
 
-	// 先由LLMPlanner决定是否检索以及如何检索
-	decision := s.plan(ctx, req.Question, req.ConversationID, &trace)
-	trace.MarkPlannerDecision(decision)
-	if decision.Action == agent.ActionContextLookup {
+	var decision agent.Decision
+	if latest != nil && latest.AnswerMode == agent.FinalModeClarify {
 		decision = s.planWithConversationContext(ctx, req, &trace)
 		trace.MarkContextResolvedDecision(decision)
+	} else {
+		plannerConversationID := ""
+		if latest != nil {
+			plannerConversationID = conversationID
+		}
+		// 先由LLMPlanner决定是否检索以及如何检索
+		decision = s.plan(ctx, req.Question, plannerConversationID, &trace)
+		trace.MarkPlannerDecision(decision)
+		if decision.Action == agent.ActionContextLookup {
+			decision = s.planWithConversationContext(ctx, req, &trace)
+			trace.MarkContextResolvedDecision(decision)
+		}
 	}
 	if decision.Action == agent.ActionKnowledgeProbe {
 		decision = s.planWithKnowledgeProbe(ctx, chatReq, decision, &trace)
@@ -136,6 +157,29 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		trace.MarkPlannerDecision(fallback)
 		return s.runKnowledgeSearchWithPlan(ctx, chatReq, fallback.SearchPlan, &trace, start)
 	}
+}
+
+// resolveConversation 托管Agent会话ID生命周期
+func (s *AgentService) resolveConversation(ctx context.Context, req AgentChatRequest) (string, *model.ChatLog, error) {
+	conversationID := strings.TrimSpace(req.ConversationID)
+	if conversationID == "" {
+		return newConversationID(), nil, nil
+	}
+	if len(conversationID) > 64 {
+		return "", nil, ErrConversationNotFound
+	}
+	latest, err := s.chat.logs.FindLatestByConversation(req.UserID, req.KnowledgeBaseID, conversationID)
+	if err != nil {
+		return "", nil, err
+	}
+	if latest == nil {
+		return "", nil, ErrConversationNotFound
+	}
+	return conversationID, latest, nil
+}
+
+func newConversationID() string {
+	return "conv_" + uuid.NewString()
 }
 
 // plan调用Planner并归一化决策
@@ -710,11 +754,12 @@ func (s *AgentService) saveAgentResponse(prepared *rag.PreparedChat, trace agent
 		return nil, pkgerrors.WithMessage(err, "保存Agent问答日志失败")
 	}
 	return &AgentChatResponse{
-		Answer:     prepared.Answer,
-		Sources:    prepared.Sources,
-		Trace:      prepared.Trace,
-		AgentTrace: trace,
-		ChatLogID:  logID,
+		ConversationID: prepared.Request.ConversationID,
+		Answer:         prepared.Answer,
+		Sources:        prepared.Sources,
+		Trace:          prepared.Trace,
+		AgentTrace:     trace,
+		ChatLogID:      logID,
 	}, nil
 }
 

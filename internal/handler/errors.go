@@ -69,6 +69,9 @@ func handleChatError(c *gin.Context, err error, fallback string) {
 	case stderrors.Is(err, service.ErrChatLogNotFound):
 		response.BusinessError(c, response.CodeChatLogNotFound, "问答日志不存在")
 		logger.S.Infof("问答日志不存在：%+v", err)
+	case stderrors.Is(err, service.ErrConversationNotFound):
+		response.BusinessError(c, response.CodeChatLogNotFound, "会话不存在或无权限访问")
+		logger.S.Infof("会话不存在或无权限访问：%+v", err)
 	case stderrors.Is(err, service.ErrInvalidFeedback):
 		response.BusinessError(c, response.CodeInvalidFeedback, "反馈参数错误")
 		logger.S.Infof("反馈参数错误：%+v", err)

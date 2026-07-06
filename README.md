@@ -238,16 +238,18 @@ Agent Router基于Eino ChatModel实现LLM Planner。Planner会在检索前判断
 
 如果选择知识库检索，Planner会生成有限的`SearchPlan`，控制检索query、topK、query rewrite、hybrid和rerank开关。代码侧会校验Planner输出，只执行白名单动作；知识库检索低置信度时会进入Post-RAG Planner，由Agent结合检索摘要决定澄清、联网补充或拒答。`AgentTrace`会记录Planner决策、直接回答、上下文工具调用、知识库轻量探测、知识库检索、联网搜索和最终回答模式。
 
-连续问答场景下，客户端可以传入`conversation_id`：
+连续问答场景下，`conversation_id`由后端托管。新会话请求可以不传`conversation_id`，服务端会生成新ID、写入问答日志并在响应中返回；同一聊天窗口后续追问时，前端继续携带上次返回的ID：
 
 ```json
 {
-  "conversation_id": "conversation-uuid",
+  "conversation_id": "conv_xxx",
   "question": "为什么要部门审批？"
 }
 ```
 
-当`conversation_id`为空时，系统按单轮问题处理，不暴露`context_lookup`工具，也不会默认读取用户最近日志，避免新话题被旧上下文污染。
+当请求携带`conversation_id`时，服务端会按`user_id`、`knowledge_base_id`和`conversation_id`校验归属；如果会话不存在或不属于当前用户和知识库，会直接拒绝。新会话虽然会生成ID，但首轮不会暴露`context_lookup`工具，避免新话题被旧上下文污染。
+
+如果上一轮最终模式是`clarify`，下一轮用户补充信息时会强制先执行`context_lookup`，再交给Context-Resolved Planner决策。这样“基础套餐”“就是那个流程”这类补充能接上上一轮澄清问题，而不是被当成孤立单轮问题。
 
 ## 配置说明
 
