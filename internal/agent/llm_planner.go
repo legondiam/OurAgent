@@ -83,17 +83,22 @@ func buildPlannerPrompt(input PlannerInput) string {
 	b.WriteString(string(input.Stage))
 	b.WriteString("\n")
 	if input.Stage == PlannerStagePostRAG {
-		b.WriteString("知识库已经检索过一次，但结果低置信度。你只能选择clarify、web_search或reject，不要选择knowledge_search或direct_answer。\n\n")
+		b.WriteString("知识库已经检索过一次，但结果低置信度。你只能选择clarify、web_search或reject，不要选择knowledge_probe、knowledge_search或direct_answer。\n\n")
+	} else if input.Stage == PlannerStageProbeResolved {
+		b.WriteString("已经完成知识库轻量探测。你只能选择direct_answer、clarify、knowledge_search、web_search或reject，不要选择knowledge_probe或context_lookup。\n")
+		b.WriteString("如果probe命中高相关企业文档，选择knowledge_search；如果probe无明显命中且问题明显通用，选择direct_answer；如果probe无明显命中但问题仍像业务对象，选择clarify或reject。\n\n")
 	} else if input.Stage == PlannerStageContextResolved {
-		b.WriteString("已经读取会话历史。你只能选择direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
+		b.WriteString("已经读取会话历史。你可以选择knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
 		b.WriteString("如果选择knowledge_search，search_plan.query必须是结合会话历史后的独立完整问题。\n\n")
 	} else {
-		b.WriteString("你可以选择context_lookup、direct_answer、clarify、knowledge_search、web_search或reject。\n")
+		b.WriteString("你可以选择context_lookup、knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject。\n")
 		b.WriteString("如果当前问题明显依赖上文，且context_lookup可用，优先选择context_lookup。\n\n")
 	}
 	b.WriteString("direct_answer仅用于寒暄、通用知识解释、写作辅助、格式转换等不依赖企业知识库和实时网络信息的问题。\n")
 	b.WriteString("如果问题涉及企业内部制度、流程、文档、配置、权限、数据或需要来源依据，不要选择direct_answer。\n")
 	b.WriteString("如果问题涉及实时公开信息，不要选择direct_answer，应选择web_search。\n\n")
+	b.WriteString("knowledge_probe用于看似通用但可能包含企业产品、型号、套餐、项目、价格、规格、产地等业务对象的问题，用来轻量探测知识库是否有相关资料。\n")
+	b.WriteString("明确企业制度、流程、文档、项目或产品资料时，直接选择knowledge_search；明确实时公开信息时，选择web_search。\n\n")
 	b.WriteString("用户问题：\n")
 	b.WriteString(input.UserQuestion)
 	b.WriteString("\n\n可用工具：\n")
@@ -116,6 +121,9 @@ func buildPlannerPrompt(input PlannerInput) string {
 	if input.Context != nil {
 		writeConversationContext(&b, input.Context)
 	}
+	if input.ProbeResult != nil {
+		writeKnowledgeProbeResult(&b, input.ProbeResult)
+	}
 	if input.Stage == PlannerStagePostRAG {
 		b.WriteString(`
 
@@ -127,12 +135,31 @@ func buildPlannerPrompt(input PlannerInput) string {
 }`)
 		return b.String()
 	}
-	if input.Stage == PlannerStageContextResolved {
+	if input.Stage == PlannerStageProbeResolved {
 		b.WriteString(`
 
 请输出JSON：
 {
   "action": "direct_answer | clarify | knowledge_search | web_search | reject",
+  "reason": "选择该动作的原因",
+  "search_plan": {
+    "query": "需要进入完整知识库检索时填写独立完整问题",
+    "top_k": 5,
+    "query_rewrite_enabled": true,
+    "hybrid_enabled": true,
+    "rerank_enabled": true,
+    "reason": "检索计划原因"
+  },
+  "clarify_question": "需要追问用户时填写"
+}`)
+		return b.String()
+	}
+	if input.Stage == PlannerStageContextResolved {
+		b.WriteString(`
+
+请输出JSON：
+{
+  "action": "knowledge_probe | direct_answer | clarify | knowledge_search | web_search | reject",
   "reason": "选择该动作的原因",
   "search_plan": {
     "query": "结合会话历史后的独立完整检索问题",
@@ -150,7 +177,7 @@ func buildPlannerPrompt(input PlannerInput) string {
 
 请输出JSON：
 {
-  "action": "context_lookup | direct_answer | clarify | knowledge_search | web_search | reject",
+  "action": "context_lookup | knowledge_probe | direct_answer | clarify | knowledge_search | web_search | reject",
   "reason": "选择该动作的原因",
   "search_plan": {
     "query": "用于检索知识库的query",
@@ -177,6 +204,32 @@ func writeConversationContext(b *strings.Builder, context *ConversationContext) 
 		b.WriteString(message.Question)
 		b.WriteString("\n   助手：")
 		b.WriteString(message.Answer)
+		b.WriteString("\n")
+	}
+}
+
+func writeKnowledgeProbeResult(b *strings.Builder, result *KnowledgeProbeResult) {
+	b.WriteString("\n\n知识库轻量探测结果：\n")
+	b.WriteString("- probe_query：")
+	b.WriteString(result.Query)
+	b.WriteString("\n- max_score：")
+	b.WriteString(floatString(result.MaxScore))
+	b.WriteString("\n- top_hits：\n")
+	if len(result.Hits) == 0 {
+		b.WriteString("  []\n")
+		return
+	}
+	for _, hit := range result.Hits {
+		b.WriteString("  - document：")
+		b.WriteString(hit.DocumentName)
+		b.WriteString("；section：")
+		b.WriteString(hit.SectionPath)
+		b.WriteString("；score：")
+		b.WriteString(floatString(hit.Score))
+		if hit.ContentPreview != "" {
+			b.WriteString("；preview：")
+			b.WriteString(hit.ContentPreview)
+		}
 		b.WriteString("\n")
 	}
 }

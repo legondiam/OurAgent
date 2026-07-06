@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"OurAgent/internal/agent"
 	"OurAgent/internal/config"
 	"OurAgent/internal/document"
 	"OurAgent/internal/model"
@@ -21,12 +22,13 @@ import (
 )
 
 type ChatService struct {
-	kbs   *repository.KnowledgeBaseRepository
-	docs  *repository.DocumentRepository
-	logs  *repository.ChatLogRepository
-	chain *rag.RAGChain
-	web   websearch.Answerer
-	cfg   *config.Config
+	kbs       *repository.KnowledgeBaseRepository
+	docs      *repository.DocumentRepository
+	logs      *repository.ChatLogRepository
+	retriever rag.Retriever
+	chain     *rag.RAGChain
+	web       websearch.Answerer
+	cfg       *config.Config
 }
 
 type ChatRequest struct {
@@ -71,7 +73,7 @@ func NewChatService(ctx context.Context, kbs *repository.KnowledgeBaseRepository
 	if err != nil {
 		return nil, pkgerrors.WithMessage(err, "初始化Eino RAG Chain失败")
 	}
-	return &ChatService{kbs: kbs, docs: docs, logs: logs, chain: ragChain, web: web, cfg: cfg}, nil
+	return &ChatService{kbs: kbs, docs: docs, logs: logs, retriever: retriever, chain: ragChain, web: web, cfg: cfg}, nil
 }
 
 // Chat执行知识库检索并生成回答
@@ -116,6 +118,63 @@ func (s *ChatService) PrepareKnowledgeAnswerWithOptions(ctx context.Context, req
 	}
 	applyKnowledgeSearchOptions(&resolved, opts)
 	return s.chain.Invoke(ctx, resolved)
+}
+
+// ProbeKnowledge 轻量探测知识库是否存在相关内容
+func (s *ChatService) ProbeKnowledge(ctx context.Context, req ChatRequest, query string, topK int) (agent.KnowledgeProbeResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		query = strings.TrimSpace(req.Question)
+	}
+	result := agent.KnowledgeProbeResult{Query: query, Hits: []agent.KnowledgeProbeHit{}}
+	if s.retriever == nil {
+		return result, stderrors.New("知识库召回器未配置")
+	}
+	resolved, prepared, err := s.validate(ctx, req)
+	if err != nil {
+		return result, err
+	}
+	if prepared != nil {
+		return result, nil
+	}
+	if topK <= 0 {
+		topK = 3
+	}
+	if topK > 3 {
+		topK = 3
+	}
+	bm25TopK := topK
+	if s.cfg.RAG.BM25TopK > 0 && s.cfg.RAG.BM25TopK < bm25TopK {
+		bm25TopK = s.cfg.RAG.BM25TopK
+	}
+	chunks, err := s.retriever.Retrieve(ctx, rag.RetrieveRequest{
+		UserID:          resolved.UserID,
+		KnowledgeBaseID: resolved.KnowledgeBaseID,
+		Query:           query,
+		TopK:            topK,
+		BM25TopK:        bm25TopK,
+		HybridEnabled:   resolved.HybridEnabled,
+		BM25Enabled:     resolved.BM25Enabled,
+		RRFK:            resolved.RRFK,
+	})
+	if err != nil {
+		return result, err
+	}
+	for i, chunk := range chunks {
+		if i >= topK {
+			break
+		}
+		if chunk.Score > result.MaxScore {
+			result.MaxScore = chunk.Score
+		}
+		result.Hits = append(result.Hits, agent.KnowledgeProbeHit{
+			DocumentName:   chunk.Document.Filename,
+			SectionPath:    chunk.MatchedChunk.SectionPath,
+			Score:          chunk.Score,
+			ContentPreview: truncateRunes(strings.TrimSpace(chunk.MatchedChunk.Content), 160),
+		})
+	}
+	return result, nil
 }
 
 // Stream执行知识库检索并流式生成回答

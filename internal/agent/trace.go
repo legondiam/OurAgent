@@ -15,6 +15,7 @@ const (
 	ToolWebSearch       = "web_search"
 	ToolAgentPlanner    = "agent_planner"
 	ToolContextLookup   = "context_lookup"
+	ToolKnowledgeProbe  = "knowledge_probe"
 	ToolDirectAnswer    = "direct_answer"
 
 	StatusSuccess       = "success"
@@ -33,6 +34,7 @@ type Trace struct {
 	PlannerDecision *Decision `json:"planner_decision,omitempty"`
 	PreRAGDecision  *Decision `json:"pre_rag_decision,omitempty"`
 	ContextDecision *Decision `json:"context_decision,omitempty"`
+	ProbeDecision   *Decision `json:"probe_decision,omitempty"`
 	PostRAGDecision *Decision `json:"post_rag_decision,omitempty"`
 	PlannerError    string    `json:"planner_error,omitempty"`
 }
@@ -95,6 +97,21 @@ func (t *Trace) MarkContextResolvedDecision(decision Decision) {
 	t.AddStep(Step{
 		Tool:   ToolAgentPlanner,
 		Action: "context_resolved_plan",
+		Status: StatusSuccess,
+		Reason: decision.Reason,
+		Metadata: map[string]any{
+			"decision_action": string(decision.Action),
+			"planned_query":   decision.SearchPlan.Query,
+		},
+	})
+}
+
+// MarkProbeResolvedDecision 记录知识库探测后的Planner决策
+func (t *Trace) MarkProbeResolvedDecision(decision Decision) {
+	t.ProbeDecision = &decision
+	t.AddStep(Step{
+		Tool:   ToolAgentPlanner,
+		Action: "probe_resolved_plan",
 		Status: StatusSuccess,
 		Reason: decision.Reason,
 		Metadata: map[string]any{

@@ -17,6 +17,7 @@ type PlannerStage string
 const (
 	PlannerStagePreRAG          PlannerStage = "pre_rag"
 	PlannerStageContextResolved PlannerStage = "context_resolved"
+	PlannerStageProbeResolved   PlannerStage = "probe_resolved"
 	PlannerStagePostRAG         PlannerStage = "post_rag"
 )
 
@@ -27,6 +28,7 @@ type PlannerInput struct {
 	WebEnabled   bool
 	Observation  *RetrievalObservation
 	Context      *ConversationContext
+	ProbeResult  *KnowledgeProbeResult
 }
 
 type ToolSpec struct {
@@ -58,6 +60,19 @@ type ConversationContext struct {
 type HistoryMessage struct {
 	Question string
 	Answer   string
+}
+
+type KnowledgeProbeResult struct {
+	Query    string
+	Hits     []KnowledgeProbeHit
+	MaxScore float64
+}
+
+type KnowledgeProbeHit struct {
+	DocumentName   string
+	SectionPath    string
+	Score          float64
+	ContentPreview string
 }
 
 type PostRAGPlanner struct{}

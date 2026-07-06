@@ -152,3 +152,58 @@ func TestNormalizePostRAGBlocksDirectAnswer(t *testing.T) {
 		t.Fatalf("expected clarify, got %s", decision.Action)
 	}
 }
+
+func TestNormalizePreRAGAllowsKnowledgeProbe(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStagePreRAG, UserQuestion: "龙井茶产地在哪里", WebEnabled: false}
+	defaults := SearchPlan{Query: "龙井茶产地在哪里", TopK: 5}
+
+	decision := NormalizeDecision(Decision{Action: ActionKnowledgeProbe}, input, defaults)
+
+	if decision.Action != ActionKnowledgeProbe {
+		t.Fatalf("expected knowledge_probe, got %s", decision.Action)
+	}
+	if decision.SearchPlan.Query != input.UserQuestion {
+		t.Fatalf("expected probe query, got %s", decision.SearchPlan.Query)
+	}
+}
+
+func TestNormalizeContextResolvedAllowsKnowledgeProbe(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStageContextResolved, UserQuestion: "产地在哪里", WebEnabled: false}
+	defaults := SearchPlan{Query: "龙井茶产地在哪里", TopK: 5}
+
+	decision := NormalizeDecision(Decision{Action: ActionKnowledgeProbe}, input, defaults)
+
+	if decision.Action != ActionKnowledgeProbe {
+		t.Fatalf("expected knowledge_probe, got %s", decision.Action)
+	}
+}
+
+func TestNormalizeProbeResolvedBlocksKnowledgeProbe(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStageProbeResolved, UserQuestion: "龙井茶产地在哪里", WebEnabled: true}
+
+	decision := NormalizeDecision(Decision{Action: ActionKnowledgeProbe}, input, SearchPlan{})
+
+	if decision.Action != ActionClarify {
+		t.Fatalf("expected clarify, got %s", decision.Action)
+	}
+}
+
+func TestNormalizeProbeResolvedBlocksContextLookup(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStageProbeResolved, UserQuestion: "龙井茶产地在哪里", WebEnabled: true}
+
+	decision := NormalizeDecision(Decision{Action: ActionContextLookup}, input, SearchPlan{})
+
+	if decision.Action != ActionClarify {
+		t.Fatalf("expected clarify, got %s", decision.Action)
+	}
+}
+
+func TestNormalizePostRAGBlocksKnowledgeProbe(t *testing.T) {
+	input := PlannerInput{Stage: PlannerStagePostRAG, UserQuestion: "龙井茶产地在哪里", WebEnabled: true}
+
+	decision := NormalizeDecision(Decision{Action: ActionKnowledgeProbe}, input, SearchPlan{})
+
+	if decision.Action != ActionClarify {
+		t.Fatalf("expected clarify, got %s", decision.Action)
+	}
+}

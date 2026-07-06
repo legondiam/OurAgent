@@ -97,6 +97,10 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		decision = s.planWithConversationContext(ctx, req, &trace)
 		trace.MarkContextResolvedDecision(decision)
 	}
+	if decision.Action == agent.ActionKnowledgeProbe {
+		decision = s.planWithKnowledgeProbe(ctx, chatReq, decision, &trace)
+		trace.MarkProbeResolvedDecision(decision)
+	}
 
 	switch decision.Action {
 	case agent.ActionClarify:
@@ -113,6 +117,13 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		return s.runWebSearchDirect(ctx, resolved, &trace, start)
 	case agent.ActionKnowledgeSearch:
 		return s.runKnowledgeSearchWithPlan(ctx, chatReq, decision.SearchPlan, &trace, start)
+	case agent.ActionKnowledgeProbe:
+		fallback := agent.Decision{
+			Action:          agent.ActionClarify,
+			Reason:          "知识库探测工具未完成最终决策",
+			ClarifyQuestion: "请补充你想查询的具体业务对象或文档范围。",
+		}
+		return s.answerClarify(resolved, fallback, trace, start)
 	case agent.ActionContextLookup:
 		fallback := agent.Decision{
 			Action:          agent.ActionClarify,
@@ -176,6 +187,42 @@ func (s *AgentService) planWithConversationContext(ctx context.Context, req Agen
 	return agent.NormalizeDecision(decision, input, defaults)
 }
 
+// planWithKnowledgeProbe 执行轻量探测并进行二次规划
+func (s *AgentService) planWithKnowledgeProbe(ctx context.Context, req ChatRequest, probeDecision agent.Decision, trace *agent.Trace) agent.Decision {
+	query := strings.TrimSpace(probeDecision.SearchPlan.Query)
+	if query == "" {
+		query = req.Question
+	}
+	result, err := s.runKnowledgeProbe(ctx, req, query, trace)
+	if err != nil {
+		trace.MarkPlannerError(err)
+		return agent.Decision{
+			Action:          agent.ActionClarify,
+			Reason:          "知识库轻量探测失败",
+			ClarifyQuestion: "请补充你想查询的具体业务对象或文档范围。",
+		}
+	}
+
+	defaults := s.defaultSearchPlan(result.Query)
+	input := agent.PlannerInput{
+		Stage:        agent.PlannerStageProbeResolved,
+		UserQuestion: req.Question,
+		Tools:        s.availableProbeResolvedTools(),
+		WebEnabled:   s.canUseWebSearch(),
+		ProbeResult:  &result,
+	}
+	decision, err := s.planner.Plan(ctx, input)
+	if err != nil {
+		trace.MarkPlannerError(err)
+		return agent.Decision{
+			Action:          agent.ActionClarify,
+			Reason:          "知识库探测后二次规划失败",
+			ClarifyQuestion: "请补充你想查询的具体业务对象或文档范围。",
+		}
+	}
+	return agent.NormalizeDecision(decision, input, defaults)
+}
+
 // runKnowledgeSearchWithPlan按Planner检索计划调用知识库RAG
 func (s *AgentService) runKnowledgeSearchWithPlan(ctx context.Context, req ChatRequest, plan agent.SearchPlan, trace *agent.Trace, start time.Time) (*AgentChatResponse, error) {
 	opts := knowledgeSearchOptionsFromPlan(plan)
@@ -188,6 +235,34 @@ func (s *AgentService) runKnowledgeSearchWithPlan(ctx context.Context, req ChatR
 		return s.saveAgentResponse(prepared, *trace, start)
 	}
 	return s.handleLowConfidence(ctx, req, prepared, trace, start)
+}
+
+// runKnowledgeProbe 调用轻量知识库探测工具
+func (s *AgentService) runKnowledgeProbe(ctx context.Context, req ChatRequest, query string, trace *agent.Trace) (agent.KnowledgeProbeResult, error) {
+	result, err := s.chat.ProbeKnowledge(ctx, req, query, 3)
+	if err != nil {
+		trace.AddStep(agent.Step{
+			Tool:   agent.ToolKnowledgeProbe,
+			Action: "probe",
+			Status: agent.StatusError,
+			Reason: err.Error(),
+			Metadata: map[string]any{
+				"query": query,
+			},
+		})
+		return result, err
+	}
+	trace.AddStep(agent.Step{
+		Tool:   agent.ToolKnowledgeProbe,
+		Action: "probe",
+		Status: agent.StatusSuccess,
+		Metadata: map[string]any{
+			"query":     result.Query,
+			"hit_count": len(result.Hits),
+			"max_score": result.MaxScore,
+		},
+	})
+	return result, nil
 }
 
 // runKnowledgeSearch调用纯知识库RAG工具
@@ -468,6 +543,7 @@ func (s *AgentService) defaultSearchPlan(question string) agent.SearchPlan {
 // availableTools返回Planner可选择的工具
 func (s *AgentService) availableTools(conversationID string) []agent.ToolSpec {
 	tools := []agent.ToolSpec{
+		{Name: string(agent.ActionKnowledgeProbe), Description: "问题可能涉及企业业务对象但不确定知识库是否有资料时轻量探测知识库"},
 		{Name: string(agent.ActionDirectAnswer), Description: "回答寒暄、通用知识解释、写作辅助或格式转换等不依赖知识库和联网的问题"},
 		{Name: string(agent.ActionClarify), Description: "问题缺少关键业务对象时先追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "查询企业知识库并基于来源回答"},
@@ -487,6 +563,7 @@ func (s *AgentService) availableTools(conversationID string) []agent.ToolSpec {
 // availableFinalTools返回不含上下文工具的最终动作列表
 func (s *AgentService) availableFinalTools() []agent.ToolSpec {
 	tools := []agent.ToolSpec{
+		{Name: string(agent.ActionKnowledgeProbe), Description: "问题可能涉及企业业务对象但不确定知识库是否有资料时轻量探测知识库"},
 		{Name: string(agent.ActionDirectAnswer), Description: "回答寒暄、通用知识解释、写作辅助或格式转换等不依赖知识库和联网的问题"},
 		{Name: string(agent.ActionClarify), Description: "问题缺少关键业务对象时先追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "查询企业知识库并基于来源回答"},
@@ -494,6 +571,20 @@ func (s *AgentService) availableFinalTools() []agent.ToolSpec {
 	}
 	if s.canUseWebSearch() {
 		tools = append(tools, agent.ToolSpec{Name: string(agent.ActionWebSearch), Description: "查询实时或公开网络信息"})
+	}
+	return tools
+}
+
+// availableProbeResolvedTools 返回知识库探测后的最终动作列表
+func (s *AgentService) availableProbeResolvedTools() []agent.ToolSpec {
+	tools := []agent.ToolSpec{
+		{Name: string(agent.ActionDirectAnswer), Description: "知识库无明显命中且问题属于通用知识或写作任务时直接回答"},
+		{Name: string(agent.ActionClarify), Description: "知识库无明显命中但问题仍像业务对象时追问用户"},
+		{Name: string(agent.ActionKnowledgeSearch), Description: "探测命中相关企业文档时进入完整知识库检索"},
+		{Name: string(agent.ActionReject), Description: "问题不适合当前系统处理时拒答"},
+	}
+	if s.canUseWebSearch() {
+		tools = append(tools, agent.ToolSpec{Name: string(agent.ActionWebSearch), Description: "问题需要实时或公开网络信息时联网搜索"})
 	}
 	return tools
 }

@@ -6,6 +6,7 @@ type Action string
 
 const (
 	ActionContextLookup   Action = "context_lookup"
+	ActionKnowledgeProbe  Action = "knowledge_probe"
 	ActionDirectAnswer    Action = "direct_answer"
 	ActionClarify         Action = "clarify"
 	ActionKnowledgeSearch Action = "knowledge_search"
@@ -75,6 +76,9 @@ func NormalizeDecision(decision Decision, input PlannerInput, defaults SearchPla
 	if input.Stage == PlannerStageContextResolved {
 		return normalizeContextResolvedDecision(decision, input, defaults)
 	}
+	if input.Stage == PlannerStageProbeResolved {
+		return normalizeProbeResolvedDecision(decision, input, defaults)
+	}
 	if decision.Action == ActionContextLookup && !hasTool(input.Tools, ActionContextLookup) {
 		decision.Action = ActionClarify
 		decision.Reason = "会话上下文不可用，改为澄清追问"
@@ -86,6 +90,8 @@ func NormalizeDecision(decision Decision, input PlannerInput, defaults SearchPla
 	switch decision.Action {
 	case ActionContextLookup, ActionDirectAnswer:
 		decision.SearchPlan = SearchPlan{}
+	case ActionKnowledgeProbe:
+		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
 	case ActionClarify:
 		if strings.TrimSpace(decision.ClarifyQuestion) == "" {
 			decision.ClarifyQuestion = defaultClarifyQuestion
@@ -112,6 +118,8 @@ func normalizeContextResolvedDecision(decision Decision, input PlannerInput, def
 		if strings.TrimSpace(decision.ClarifyQuestion) == "" {
 			decision.ClarifyQuestion = defaultClarifyQuestion
 		}
+	case ActionKnowledgeProbe:
+		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
 	case ActionKnowledgeSearch:
 		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
 	case ActionDirectAnswer, ActionWebSearch, ActionReject:
@@ -127,10 +135,43 @@ func normalizeContextResolvedDecision(decision Decision, input PlannerInput, def
 	return decision
 }
 
+func normalizeProbeResolvedDecision(decision Decision, input PlannerInput, defaults SearchPlan) Decision {
+	if decision.Action == "" || decision.Action == ActionContextLookup || decision.Action == ActionKnowledgeProbe {
+		decision.Action = ActionClarify
+		decision.Reason = "知识库探测后仍缺少明确决策，改为澄清追问"
+	}
+	if decision.Action == ActionWebSearch && !input.WebEnabled {
+		decision.Action = ActionReject
+		decision.Reason = "联网搜索未启用，改为拒答"
+	}
+	switch decision.Action {
+	case ActionClarify:
+		if strings.TrimSpace(decision.ClarifyQuestion) == "" {
+			decision.ClarifyQuestion = defaultClarifyQuestion
+		}
+	case ActionKnowledgeSearch:
+		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
+	case ActionDirectAnswer, ActionWebSearch, ActionReject:
+		decision.SearchPlan = SearchPlan{}
+	default:
+		decision.Action = ActionClarify
+		decision.Reason = "知识库探测后二次规划动作非法，改为澄清追问"
+		if strings.TrimSpace(decision.ClarifyQuestion) == "" {
+			decision.ClarifyQuestion = defaultClarifyQuestion
+		}
+		decision.SearchPlan = SearchPlan{}
+	}
+	return decision
+}
+
 func normalizePostRAGDecision(decision Decision, input PlannerInput) Decision {
 	if decision.Action == ActionContextLookup {
 		decision.Action = ActionClarify
 		decision.Reason = "后置规划阶段不能读取会话上下文，改为澄清追问"
+	}
+	if decision.Action == ActionKnowledgeProbe {
+		decision.Action = ActionClarify
+		decision.Reason = "后置规划阶段不能轻量探测知识库，改为澄清追问"
 	}
 	if decision.Action == ActionDirectAnswer {
 		decision.Action = ActionClarify
@@ -169,6 +210,9 @@ func defaultActionForStage(input PlannerInput) Action {
 	if input.Stage == PlannerStageContextResolved {
 		return ActionClarify
 	}
+	if input.Stage == PlannerStageProbeResolved {
+		return ActionClarify
+	}
 	return ActionKnowledgeSearch
 }
 
@@ -199,6 +243,8 @@ func normalizeAction(action Action) Action {
 	switch Action(strings.TrimSpace(string(action))) {
 	case ActionContextLookup:
 		return ActionContextLookup
+	case ActionKnowledgeProbe:
+		return ActionKnowledgeProbe
 	case ActionDirectAnswer:
 		return ActionDirectAnswer
 	case ActionClarify:
