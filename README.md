@@ -232,7 +232,7 @@ question
   -> answer, sources, retrieval trace, agent trace
 ```
 
-Agent Router基于Eino ChatModel实现LLM Planner。Planner会在检索前判断用户问题是否可以直接回答、是否需要读取会话上下文、轻量探测知识库、澄清、查询知识库、直接联网或拒答。`direct_answer`仅用于寒暄、通用知识解释、写作辅助和格式转换等不依赖企业知识库和实时信息的问题，不返回知识库来源；如果选择`context_lookup`，服务端会读取同一用户、同一知识库、同一`conversation_id`下最近几轮问答，再让Planner基于历史进行二次决策。二次决策阶段不允许再次选择`context_lookup`，避免循环。
+Agent Router基于Eino ChatModel实现LLM Planner，并使用原生function calling输出动作决策：function name对应Agent动作，arguments沿用`reason`、`search_plan`和`clarify_question`等现有Decision字段，真实工具执行仍由服务端统一调度。Planner会在检索前判断用户问题是否可以直接回答、是否需要读取会话上下文、轻量探测知识库、澄清、查询知识库、直接联网或拒答。`direct_answer`仅用于寒暄、通用知识解释、写作辅助和格式转换等不依赖企业知识库和实时信息的问题，不返回知识库来源；如果选择`context_lookup`，服务端会读取同一用户、同一知识库、同一`conversation_id`下最近几轮问答，再让Planner基于历史进行二次决策。二次决策阶段不允许再次选择`context_lookup`，避免循环。
 
 `knowledge_probe`用于问题看似通用、但可能包含企业产品、项目、型号、套餐、价格、规格等业务对象的场景。它复用现有召回器，只取少量候选的标题、路径、分数和预览，不生成最终答案；随后Probe-Resolved Planner会根据探测结果决定进入完整知识库检索、直接回答、澄清、联网搜索或拒答。
 

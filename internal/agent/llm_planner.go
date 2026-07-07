@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -26,15 +27,176 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlannerInput) (Decision, er
 		schema.SystemMessage(agentRouterSystemPrompt),
 		schema.UserMessage(buildPlannerPrompt(input)),
 	}
-	resp, err := p.chat.Generate(ctx, messages)
+	tools := buildPlannerToolInfos(input)
+	resp, err := p.chat.Generate(
+		ctx,
+		messages,
+		einomodel.WithTools(tools),
+		einomodel.WithToolChoice(schema.ToolChoiceForced),
+	)
 	if err != nil {
 		return Decision{}, pkgerrors.WithMessage(err, "调用Agent Planner失败")
 	}
-	decision, err := ParseDecision(resp.Content)
+	decision, err := ParseToolCallDecision(resp.ToolCalls, input)
 	if err != nil {
-		return Decision{}, pkgerrors.WithMessage(err, "解析Agent Planner决策失败")
+		return Decision{}, pkgerrors.WithMessage(err, "解析Agent Planner工具调用失败")
 	}
 	return decision, nil
+}
+
+type plannerToolArgs struct {
+	Reason          string      `json:"reason"`
+	SearchPlan      *SearchPlan `json:"search_plan,omitempty"`
+	ClarifyQuestion *string     `json:"clarify_question,omitempty"`
+}
+
+// ParseToolCallDecision解析Planner工具调用
+func ParseToolCallDecision(calls []schema.ToolCall, input PlannerInput) (Decision, error) {
+	if len(calls) != 1 {
+		return Decision{}, fmt.Errorf("期望1个tool_call，实际%d个", len(calls))
+	}
+	call := calls[0]
+	action := normalizeAction(Action(call.Function.Name))
+	if action == "" {
+		return Decision{}, fmt.Errorf("未知function：%s", call.Function.Name)
+	}
+	if !hasTool(input.Tools, action) {
+		return Decision{}, fmt.Errorf("当前阶段不允许function：%s", call.Function.Name)
+	}
+	var args plannerToolArgs
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+		return Decision{}, err
+	}
+	if strings.TrimSpace(args.Reason) == "" {
+		return Decision{}, fmt.Errorf("%s缺少reason", action)
+	}
+	decision := Decision{
+		Action: action,
+		Reason: args.Reason,
+	}
+	switch action {
+	case ActionKnowledgeProbe, ActionKnowledgeSearch:
+		if args.SearchPlan == nil {
+			return Decision{}, fmt.Errorf("%s缺少search_plan", action)
+		}
+		decision.SearchPlan = *args.SearchPlan
+	case ActionClarify:
+		if args.ClarifyQuestion == nil || strings.TrimSpace(*args.ClarifyQuestion) == "" {
+			return Decision{}, fmt.Errorf("%s缺少clarify_question", action)
+		}
+		decision.ClarifyQuestion = *args.ClarifyQuestion
+	case ActionContextLookup, ActionDirectAnswer, ActionWebSearch, ActionReject:
+	default:
+		return Decision{}, fmt.Errorf("不支持function：%s", action)
+	}
+	return decision, nil
+}
+
+func buildPlannerToolInfos(input PlannerInput) []*schema.ToolInfo {
+	tools := make([]*schema.ToolInfo, 0, len(input.Tools))
+	for _, tool := range input.Tools {
+		action := normalizeAction(Action(tool.Name))
+		if action == "" {
+			continue
+		}
+		info := plannerToolInfo(action, tool.Description)
+		if info != nil {
+			tools = append(tools, info)
+		}
+	}
+	return tools
+}
+
+func plannerToolInfo(action Action, desc string) *schema.ToolInfo {
+	switch action {
+	case ActionContextLookup:
+		return reasonOnlyTool(action, desc)
+	case ActionKnowledgeProbe:
+		return &schema.ToolInfo{
+			Name: string(action),
+			Desc: desc,
+			ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+				"reason": requiredStringParam("选择该动作的原因"),
+				"search_plan": {
+					Type:     schema.Object,
+					Desc:     "轻量探测计划",
+					Required: true,
+					SubParams: map[string]*schema.ParameterInfo{
+						"query":  requiredStringParam("用于轻量探测知识库的查询"),
+						"reason": optionalStringParam("探测query的原因"),
+					},
+				},
+			}),
+		}
+	case ActionKnowledgeSearch:
+		return &schema.ToolInfo{
+			Name: string(action),
+			Desc: desc,
+			ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+				"reason":      requiredStringParam("选择该动作的原因"),
+				"search_plan": requiredSearchPlanParam(),
+			}),
+		}
+	case ActionDirectAnswer:
+		return reasonOnlyTool(action, desc)
+	case ActionClarify:
+		return &schema.ToolInfo{
+			Name: string(action),
+			Desc: desc,
+			ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+				"reason":           requiredStringParam("选择该动作的原因"),
+				"clarify_question": requiredStringParam("需要追问用户的问题"),
+			}),
+		}
+	case ActionWebSearch:
+		return reasonOnlyTool(action, desc)
+	case ActionReject:
+		return reasonOnlyTool(action, desc)
+	default:
+		return nil
+	}
+}
+
+func reasonOnlyTool(action Action, desc string) *schema.ToolInfo {
+	return &schema.ToolInfo{
+		Name: string(action),
+		Desc: desc,
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"reason": requiredStringParam("选择该动作的原因"),
+		}),
+	}
+}
+
+func requiredSearchPlanParam() *schema.ParameterInfo {
+	return &schema.ParameterInfo{
+		Type:     schema.Object,
+		Desc:     "知识库检索计划",
+		Required: true,
+		SubParams: map[string]*schema.ParameterInfo{
+			"query":                 requiredStringParam("用于完整知识库检索的独立完整问题"),
+			"top_k":                 optionalIntegerParam("检索候选数量"),
+			"query_rewrite_enabled": optionalBooleanParam("是否启用query改写"),
+			"hybrid_enabled":        optionalBooleanParam("是否启用混合检索"),
+			"rerank_enabled":        optionalBooleanParam("是否启用重排"),
+			"reason":                optionalStringParam("检索计划原因"),
+		},
+	}
+}
+
+func requiredStringParam(desc string) *schema.ParameterInfo {
+	return &schema.ParameterInfo{Type: schema.String, Desc: desc, Required: true}
+}
+
+func optionalStringParam(desc string) *schema.ParameterInfo {
+	return &schema.ParameterInfo{Type: schema.String, Desc: desc}
+}
+
+func optionalIntegerParam(desc string) *schema.ParameterInfo {
+	return &schema.ParameterInfo{Type: schema.Integer, Desc: desc}
+}
+
+func optionalBooleanParam(desc string) *schema.ParameterInfo {
+	return &schema.ParameterInfo{Type: schema.Boolean, Desc: desc}
 }
 
 // ParseDecision解析Planner输出JSON
@@ -68,11 +230,12 @@ const agentRouterSystemPrompt = `你是企业知识库Agent Router。
 1. 不要回答用户问题
 2. 不要编造工具
 3. 不要编造知识库内容
-4. 只输出JSON
+4. 只能调用当前阶段提供的function
 5. 如果选择knowledge_search，必须给出search_plan
 6. 如果选择clarify，必须给出clarify_question
 7. 如果web_search不可用，不能选择web_search
-8. 当前阶段未允许的action不能选择`
+8. 当前阶段未允许的function不能选择
+9. 无法处理时调用reject`
 
 func buildPlannerPrompt(input PlannerInput) string {
 	if input.Stage == "" {
@@ -124,71 +287,6 @@ func buildPlannerPrompt(input PlannerInput) string {
 	if input.ProbeResult != nil {
 		writeKnowledgeProbeResult(&b, input.ProbeResult)
 	}
-	if input.Stage == PlannerStagePostRAG {
-		b.WriteString(`
-
-请输出JSON：
-{
-  "action": "clarify | web_search | reject",
-  "reason": "选择该动作的原因",
-  "clarify_question": "需要追问用户时填写"
-}`)
-		return b.String()
-	}
-	if input.Stage == PlannerStageProbeResolved {
-		b.WriteString(`
-
-请输出JSON：
-{
-  "action": "direct_answer | clarify | knowledge_search | web_search | reject",
-  "reason": "选择该动作的原因",
-  "search_plan": {
-    "query": "需要进入完整知识库检索时填写独立完整问题",
-    "top_k": 5,
-    "query_rewrite_enabled": true,
-    "hybrid_enabled": true,
-    "rerank_enabled": true,
-    "reason": "检索计划原因"
-  },
-  "clarify_question": "需要追问用户时填写"
-}`)
-		return b.String()
-	}
-	if input.Stage == PlannerStageContextResolved {
-		b.WriteString(`
-
-请输出JSON：
-{
-  "action": "knowledge_probe | direct_answer | clarify | knowledge_search | web_search | reject",
-  "reason": "选择该动作的原因",
-  "search_plan": {
-    "query": "结合会话历史后的独立完整检索问题",
-    "top_k": 5,
-    "query_rewrite_enabled": true,
-    "hybrid_enabled": true,
-    "rerank_enabled": true,
-    "reason": "检索计划原因"
-  },
-  "clarify_question": "需要追问用户时填写"
-}`)
-		return b.String()
-	}
-	b.WriteString(`
-
-请输出JSON：
-{
-  "action": "context_lookup | knowledge_probe | direct_answer | clarify | knowledge_search | web_search | reject",
-  "reason": "选择该动作的原因",
-  "search_plan": {
-    "query": "用于检索知识库的query",
-    "top_k": 5,
-    "query_rewrite_enabled": true,
-    "hybrid_enabled": true,
-    "rerank_enabled": true,
-    "reason": "检索计划原因"
-  },
-  "clarify_question": "需要追问用户时填写"
-}`)
 	return b.String()
 }
 
