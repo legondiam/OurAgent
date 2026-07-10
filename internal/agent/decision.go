@@ -233,6 +233,15 @@ func NormalizeSearchPlan(plan SearchPlan, question string, defaults SearchPlan) 
 	if plan.TopK > 20 {
 		plan.TopK = 20
 	}
+	if defaults.QueryRewriteEnabled {
+		plan.QueryRewriteEnabled = true
+	}
+	if defaults.HybridEnabled {
+		plan.HybridEnabled = true
+	}
+	if defaults.RerankEnabled {
+		plan.RerankEnabled = true
+	}
 	if strings.TrimSpace(plan.Reason) == "" {
 		plan.Reason = "使用Planner生成的检索计划"
 	}

@@ -68,11 +68,44 @@ func TestBuildPlannerPromptForPreRAGContextLookup(t *testing.T) {
 	if !strings.Contains(prompt, "direct_answer仅用于寒暄") {
 		t.Fatal("expected direct answer instruction")
 	}
+	if !strings.Contains(prompt, "reject优先级最高") {
+		t.Fatal("expected reject priority instruction")
+	}
+	if !strings.Contains(prompt, "实际删除或篡改审计日志") {
+		t.Fatal("expected sensitive data rejection instruction")
+	}
+	if !strings.Contains(prompt, "只是询问客户数据、审计日志、权限或安全规范是否允许") {
+		t.Fatal("expected safety policy lookup boundary instruction")
+	}
+	if !strings.Contains(prompt, "我能不能、能否、是否可以、可不可以") {
+		t.Fatal("expected permission question lookup instruction")
+	}
+	if !strings.Contains(prompt, "帮我、请你、替我") {
+		t.Fatal("expected high risk execution rejection instruction")
+	}
+	if !strings.Contains(prompt, "给出通用建议、示例、维度或写作素材") {
+		t.Fatal("expected generic suggestion direct answer instruction")
+	}
 	if !strings.Contains(prompt, "不要选择direct_answer") {
 		t.Fatal("expected direct answer safety boundary")
 	}
-	if !strings.Contains(prompt, "knowledge_probe用于看似通用但可能包含企业产品") {
+	if !strings.Contains(prompt, "knowledge_probe用于看似通用但可能包含企业制度、流程、报销、发票、审批") {
 		t.Fatal("expected knowledge probe instruction")
+	}
+	if !strings.Contains(prompt, "外部知识源、同步失败、索引失败") {
+		t.Fatal("expected external source failure probe instruction")
+	}
+	if !strings.Contains(prompt, "补充可能的企业文档上位词或同义词") {
+		t.Fatal("expected probe query expansion instruction")
+	}
+	if !strings.Contains(prompt, "字段数量限制可补充产品、套餐、字段上限、扩容申请") {
+		t.Fatal("expected field limit probe query example")
+	}
+	if !strings.Contains(prompt, "不要仅因为用户没说公司名就clarify") {
+		t.Fatal("expected gray enterprise probe instruction")
+	}
+	if !strings.Contains(prompt, "clarify只用于缺少可检索对象") {
+		t.Fatal("expected clarify boundary instruction")
 	}
 	if strings.Contains(prompt, "请输出JSON") {
 		t.Fatal("function calling prompt should not ask for JSON output")
@@ -135,6 +168,21 @@ func TestBuildPlannerPromptForProbeResolved(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "产品资料-龙井茶.md") {
 		t.Fatal("expected probe hit")
+	}
+	if !strings.Contains(prompt, "通用解释、建议、示例或写作素材选择direct_answer") {
+		t.Fatal("expected probe miss direct_answer instruction")
+	}
+	if !strings.Contains(prompt, "缺少具体业务对象或范围选择clarify") {
+		t.Fatal("expected probe miss clarify instruction")
+	}
+	if !strings.Contains(prompt, "要求执行高风险操作选择reject") {
+		t.Fatal("expected probe miss reject instruction")
+	}
+	if !strings.Contains(prompt, "需要实时公开信息选择web_search") {
+		t.Fatal("expected probe miss web_search instruction")
+	}
+	if !strings.Contains(prompt, "不要因为probe无命中就默认knowledge_search") {
+		t.Fatal("expected probe miss no default knowledge_search instruction")
 	}
 }
 
@@ -248,6 +296,24 @@ func TestParseToolCallDecisionKnowledgeProbe(t *testing.T) {
 	}
 	if decision.SearchPlan.Query != "龙井茶产地" {
 		t.Fatalf("expected probe query, got %s", decision.SearchPlan.Query)
+	}
+}
+
+func TestParseToolCallDecisionSearchPlanString(t *testing.T) {
+	decision, err := ParseToolCallDecision([]schema.ToolCall{{
+		Function: schema.FunctionCall{
+			Name:      string(ActionKnowledgeSearch),
+			Arguments: `{"reason":"命中知识库","search_plan":"合同金额 个人网盘 安全规范"}`,
+		},
+	}}, PlannerInput{Tools: []ToolSpec{{Name: string(ActionKnowledgeSearch)}}})
+	if err != nil {
+		t.Fatalf("parse tool call: %v", err)
+	}
+	if decision.Action != ActionKnowledgeSearch {
+		t.Fatalf("expected knowledge_search, got %s", decision.Action)
+	}
+	if decision.SearchPlan.Query != "合同金额 个人网盘 安全规范" {
+		t.Fatalf("expected string search_plan as query, got %s", decision.SearchPlan.Query)
 	}
 }
 

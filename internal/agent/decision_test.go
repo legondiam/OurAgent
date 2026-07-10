@@ -45,6 +45,39 @@ func TestNormalizeDecisionLimitsTopK(t *testing.T) {
 	}
 }
 
+func TestNormalizeDecisionMergesDefaultSearchOptions(t *testing.T) {
+	input := PlannerInput{UserQuestion: "合同金额能发个人网盘吗", WebEnabled: true}
+	defaults := SearchPlan{
+		Query:               input.UserQuestion,
+		TopK:                8,
+		QueryRewriteEnabled: true,
+		HybridEnabled:       true,
+		RerankEnabled:       true,
+	}
+	decision := Decision{
+		Action:     ActionKnowledgeSearch,
+		SearchPlan: SearchPlan{Query: "合同金额 个人网盘 安全规范"},
+	}
+
+	normalized := NormalizeDecision(decision, input, defaults)
+
+	if normalized.SearchPlan.Query != "合同金额 个人网盘 安全规范" {
+		t.Fatalf("expected planned query, got %s", normalized.SearchPlan.Query)
+	}
+	if normalized.SearchPlan.TopK != 8 {
+		t.Fatalf("expected default top_k 8, got %d", normalized.SearchPlan.TopK)
+	}
+	if !normalized.SearchPlan.QueryRewriteEnabled {
+		t.Fatal("expected default query rewrite enabled")
+	}
+	if !normalized.SearchPlan.HybridEnabled {
+		t.Fatal("expected default hybrid enabled")
+	}
+	if !normalized.SearchPlan.RerankEnabled {
+		t.Fatal("expected default rerank enabled")
+	}
+}
+
 func TestNormalizePostRAGBlocksKnowledgeSearch(t *testing.T) {
 	input := PlannerInput{Stage: PlannerStagePostRAG, UserQuestion: "报销流程怎么走", WebEnabled: true}
 

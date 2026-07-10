@@ -45,9 +45,9 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlannerInput) (Decision, er
 }
 
 type plannerToolArgs struct {
-	Reason          string      `json:"reason"`
-	SearchPlan      *SearchPlan `json:"search_plan,omitempty"`
-	ClarifyQuestion *string     `json:"clarify_question,omitempty"`
+	Reason          string          `json:"reason"`
+	SearchPlan      json.RawMessage `json:"search_plan,omitempty"`
+	ClarifyQuestion *string         `json:"clarify_question,omitempty"`
 }
 
 // ParseToolCallDecision解析Planner工具调用
@@ -76,10 +76,14 @@ func ParseToolCallDecision(calls []schema.ToolCall, input PlannerInput) (Decisio
 	}
 	switch action {
 	case ActionKnowledgeProbe, ActionKnowledgeSearch:
-		if args.SearchPlan == nil {
+		searchPlan, err := parseSearchPlanArg(args.SearchPlan)
+		if err != nil {
+			return Decision{}, fmt.Errorf("%s的search_plan无效：%w", action, err)
+		}
+		if strings.TrimSpace(searchPlan.Query) == "" {
 			return Decision{}, fmt.Errorf("%s缺少search_plan", action)
 		}
-		decision.SearchPlan = *args.SearchPlan
+		decision.SearchPlan = searchPlan
 	case ActionClarify:
 		if args.ClarifyQuestion == nil || strings.TrimSpace(*args.ClarifyQuestion) == "" {
 			return Decision{}, fmt.Errorf("%s缺少clarify_question", action)
@@ -90,6 +94,21 @@ func ParseToolCallDecision(calls []schema.ToolCall, input PlannerInput) (Decisio
 		return Decision{}, fmt.Errorf("不支持function：%s", action)
 	}
 	return decision, nil
+}
+
+func parseSearchPlanArg(raw json.RawMessage) (SearchPlan, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return SearchPlan{}, fmt.Errorf("缺少search_plan")
+	}
+	var plan SearchPlan
+	if err := json.Unmarshal(raw, &plan); err == nil {
+		return plan, nil
+	}
+	var query string
+	if err := json.Unmarshal(raw, &query); err != nil {
+		return SearchPlan{}, err
+	}
+	return SearchPlan{Query: strings.TrimSpace(query)}, nil
 }
 
 func buildPlannerToolInfos(input PlannerInput) []*schema.ToolInfo {
@@ -249,7 +268,9 @@ func buildPlannerPrompt(input PlannerInput) string {
 		b.WriteString("知识库已经检索过一次，但结果低置信度。你只能选择clarify、web_search或reject，不要选择knowledge_probe、knowledge_search或direct_answer。\n\n")
 	} else if input.Stage == PlannerStageProbeResolved {
 		b.WriteString("已经完成知识库轻量探测。你只能选择direct_answer、clarify、knowledge_search、web_search或reject，不要选择knowledge_probe或context_lookup。\n")
-		b.WriteString("如果probe命中高相关企业文档，选择knowledge_search；如果probe无明显命中且问题明显通用，选择direct_answer；如果probe无明显命中但问题仍像业务对象，选择clarify或reject。\n\n")
+		b.WriteString("如果probe命中高相关企业文档，选择knowledge_search。\n")
+		b.WriteString("如果probe无明显命中：通用解释、建议、示例或写作素材选择direct_answer；缺少具体业务对象或范围选择clarify；要求执行高风险操作选择reject；需要实时公开信息选择web_search。\n")
+		b.WriteString("不要因为probe无命中就默认knowledge_search。\n\n")
 	} else if input.Stage == PlannerStageContextResolved {
 		b.WriteString("已经读取会话历史。你可以选择knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
 		b.WriteString("如果选择knowledge_search，search_plan.query必须是结合会话历史后的独立完整问题。\n\n")
@@ -257,11 +278,18 @@ func buildPlannerPrompt(input PlannerInput) string {
 		b.WriteString("你可以选择context_lookup、knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject。\n")
 		b.WriteString("如果当前问题明显依赖上文，且context_lookup可用，优先选择context_lookup。\n\n")
 	}
+	b.WriteString("reject优先级最高。用户请求实际删除或篡改审计日志、导出或发送客户数据到个人邮箱、绕过权限、泄露密钥、处理敏感数据等高风险操作时，直接选择reject，不要knowledge_probe、knowledge_search或clarify。\n")
+	b.WriteString("如果用户只是询问客户数据、审计日志、权限或安全规范是否允许、有哪些限制、影响或合规要求，应该选择knowledge_probe或knowledge_search，不要reject。\n")
+	b.WriteString("包含“我能不能、能否、是否可以、可不可以”的问题通常是在询问合规边界，即使动作本身高风险，也应查询知识库给出依据；包含“帮我、请你、替我”并要求执行高风险动作时才reject。\n")
 	b.WriteString("direct_answer仅用于寒暄、通用知识解释、写作辅助、格式转换等不依赖企业知识库和实时网络信息的问题。\n")
+	b.WriteString("如果用户只是要求给出通用建议、示例、维度或写作素材，且没有要求依据公司制度、产品手册或内部标准，选择direct_answer。\n")
 	b.WriteString("如果问题涉及企业内部制度、流程、文档、配置、权限、数据或需要来源依据，不要选择direct_answer。\n")
 	b.WriteString("如果问题涉及实时公开信息，不要选择direct_answer，应选择web_search。\n\n")
-	b.WriteString("knowledge_probe用于看似通用但可能包含企业产品、型号、套餐、项目、价格、规格、产地等业务对象的问题，用来轻量探测知识库是否有相关资料。\n")
-	b.WriteString("明确企业制度、流程、文档、项目或产品资料时，直接选择knowledge_search；明确实时公开信息时，选择web_search。\n\n")
+	b.WriteString("knowledge_probe用于看似通用但可能包含企业制度、流程、报销、发票、审批、权限、配置、产品、套餐、项目、价格、规格、外部知识源、同步失败、索引失败等业务线索的问题，用来轻量探测知识库是否有相关资料。\n")
+	b.WriteString("knowledge_probe的search_plan.query应保留用户关键词，并补充可能的企业文档上位词或同义词，例如字段数量限制可补充产品、套餐、字段上限、扩容申请。\n")
+	b.WriteString("如果问题有可检索的企业业务线索，不要仅因为用户没说公司名就clarify，优先knowledge_probe或knowledge_search。\n")
+	b.WriteString("clarify只用于缺少可检索对象、指代严重依赖上文或必须由用户补充范围的问题。\n")
+	b.WriteString("明确企业制度、流程、文档、项目或产品资料时，直接选择knowledge_search；不确定知识库是否覆盖时，选择knowledge_probe；明确实时公开信息时，选择web_search。\n\n")
 	b.WriteString("用户问题：\n")
 	b.WriteString(input.UserQuestion)
 	b.WriteString("\n\n可用工具：\n")

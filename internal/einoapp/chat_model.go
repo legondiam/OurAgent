@@ -24,5 +24,8 @@ func NewChatModelWithTemperature(ctx context.Context, baseURL, apiKey, modelName
 		Model:       modelName,
 		Temperature: &temp,
 		Timeout:     120 * time.Second,
+		ExtraFields: map[string]any{
+			"enable_thinking": false,
+		},
 	})
 }

@@ -587,11 +587,11 @@ func (s *AgentService) defaultSearchPlan(question string) agent.SearchPlan {
 // availableTools返回Planner可选择的工具
 func (s *AgentService) availableTools(conversationID string) []agent.ToolSpec {
 	tools := []agent.ToolSpec{
-		{Name: string(agent.ActionKnowledgeProbe), Description: "问题可能涉及企业业务对象但不确定知识库是否有资料时轻量探测知识库"},
+		{Name: string(agent.ActionKnowledgeProbe), Description: "问题可能涉及企业制度、流程、产品或业务对象但不确定知识库是否有资料时轻量探测知识库"},
 		{Name: string(agent.ActionDirectAnswer), Description: "回答寒暄、通用知识解释、写作辅助或格式转换等不依赖知识库和联网的问题"},
-		{Name: string(agent.ActionClarify), Description: "问题缺少关键业务对象时先追问用户"},
+		{Name: string(agent.ActionClarify), Description: "问题缺少可检索对象或必须补充范围时先追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "查询企业知识库并基于来源回答"},
-		{Name: string(agent.ActionReject), Description: "问题不适合当前系统处理时拒答"},
+		{Name: string(agent.ActionReject), Description: "请求高风险操作、敏感数据外发、绕过权限或不适合当前系统处理时拒答"},
 	}
 	if strings.TrimSpace(conversationID) != "" {
 		tools = append([]agent.ToolSpec{
@@ -607,11 +607,11 @@ func (s *AgentService) availableTools(conversationID string) []agent.ToolSpec {
 // availableFinalTools返回不含上下文工具的最终动作列表
 func (s *AgentService) availableFinalTools() []agent.ToolSpec {
 	tools := []agent.ToolSpec{
-		{Name: string(agent.ActionKnowledgeProbe), Description: "问题可能涉及企业业务对象但不确定知识库是否有资料时轻量探测知识库"},
+		{Name: string(agent.ActionKnowledgeProbe), Description: "问题可能涉及企业制度、流程、产品或业务对象但不确定知识库是否有资料时轻量探测知识库"},
 		{Name: string(agent.ActionDirectAnswer), Description: "回答寒暄、通用知识解释、写作辅助或格式转换等不依赖知识库和联网的问题"},
-		{Name: string(agent.ActionClarify), Description: "问题缺少关键业务对象时先追问用户"},
+		{Name: string(agent.ActionClarify), Description: "问题缺少可检索对象或必须补充范围时先追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "查询企业知识库并基于来源回答"},
-		{Name: string(agent.ActionReject), Description: "问题不适合当前系统处理时拒答"},
+		{Name: string(agent.ActionReject), Description: "请求高风险操作、敏感数据外发、绕过权限或不适合当前系统处理时拒答"},
 	}
 	if s.canUseWebSearch() {
 		tools = append(tools, agent.ToolSpec{Name: string(agent.ActionWebSearch), Description: "查询实时或公开网络信息"})
@@ -623,9 +623,9 @@ func (s *AgentService) availableFinalTools() []agent.ToolSpec {
 func (s *AgentService) availableProbeResolvedTools() []agent.ToolSpec {
 	tools := []agent.ToolSpec{
 		{Name: string(agent.ActionDirectAnswer), Description: "知识库无明显命中且问题属于通用知识或写作任务时直接回答"},
-		{Name: string(agent.ActionClarify), Description: "知识库无明显命中但问题仍像业务对象时追问用户"},
+		{Name: string(agent.ActionClarify), Description: "知识库无明显命中但问题仍像企业制度、流程或业务对象时追问用户"},
 		{Name: string(agent.ActionKnowledgeSearch), Description: "探测命中相关企业文档时进入完整知识库检索"},
-		{Name: string(agent.ActionReject), Description: "问题不适合当前系统处理时拒答"},
+		{Name: string(agent.ActionReject), Description: "请求高风险操作、敏感数据外发、绕过权限或不适合当前系统处理时拒答"},
 	}
 	if s.canUseWebSearch() {
 		tools = append(tools, agent.ToolSpec{Name: string(agent.ActionWebSearch), Description: "问题需要实时或公开网络信息时联网搜索"})
