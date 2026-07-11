@@ -1,5 +1,7 @@
 package agent
 
+import "strings"
+
 const (
 	IntentKnowledgeQA     = "knowledge_qa"
 	IntentWebAugmentedQA  = "web_augmented_qa"
@@ -25,19 +27,20 @@ const (
 )
 
 type Trace struct {
-	Intent          string    `json:"intent"`
-	Plan            string    `json:"plan"`
-	ConversationID  string    `json:"conversation_id,omitempty"`
-	Steps           []Step    `json:"steps"`
-	FinalMode       string    `json:"final_mode"`
-	Clarify         string    `json:"clarify,omitempty"`
-	RejectReason    string    `json:"reject_reason,omitempty"`
-	PlannerDecision *Decision `json:"planner_decision,omitempty"`
-	PreRAGDecision  *Decision `json:"pre_rag_decision,omitempty"`
-	ContextDecision *Decision `json:"context_decision,omitempty"`
-	ProbeDecision   *Decision `json:"probe_decision,omitempty"`
-	PostRAGDecision *Decision `json:"post_rag_decision,omitempty"`
-	PlannerError    string    `json:"planner_error,omitempty"`
+	Intent          string         `json:"intent"`
+	Plan            string         `json:"plan"`
+	ConversationID  string         `json:"conversation_id,omitempty"`
+	Steps           []Step         `json:"steps"`
+	FinalMode       string         `json:"final_mode"`
+	Clarify         string         `json:"clarify,omitempty"`
+	RejectReason    string         `json:"reject_reason,omitempty"`
+	PlannerDecision *Decision      `json:"planner_decision,omitempty"`
+	PreRAGDecision  *Decision      `json:"pre_rag_decision,omitempty"`
+	ContextDecision *Decision      `json:"context_decision,omitempty"`
+	ProbeDecision   *Decision      `json:"probe_decision,omitempty"`
+	ProbeEvidence   *ProbeEvidence `json:"probe_evidence,omitempty"`
+	PostRAGDecision *Decision      `json:"post_rag_decision,omitempty"`
+	PlannerError    string         `json:"planner_error,omitempty"`
 }
 
 type Step struct {
@@ -110,14 +113,33 @@ func (t *Trace) MarkContextResolvedDecision(decision Decision) {
 // MarkProbeResolvedDecision 记录知识库探测后的Planner决策
 func (t *Trace) MarkProbeResolvedDecision(decision Decision) {
 	t.ProbeDecision = &decision
+	metadata := map[string]any{
+		"decision_action": string(decision.Action),
+		"planned_query":   decision.SearchPlan.Query,
+	}
+	if t.ProbeEvidence != nil {
+		metadata["probe_evidence_level"] = t.ProbeEvidence.Level
+		metadata["probe_evidence_reasons"] = t.ProbeEvidence.Reasons
+	}
 	t.AddStep(Step{
-		Tool:   ToolAgentPlanner,
-		Action: "probe_resolved_plan",
+		Tool:     ToolAgentPlanner,
+		Action:   "probe_resolved_plan",
+		Status:   StatusSuccess,
+		Reason:   decision.Reason,
+		Metadata: metadata,
+	})
+}
+
+// MarkProbeEvidence记录轻量探测证据强弱
+func (t *Trace) MarkProbeEvidence(evidence ProbeEvidence) {
+	t.ProbeEvidence = &evidence
+	t.AddStep(Step{
+		Tool:   ToolKnowledgeProbe,
+		Action: "evidence",
 		Status: StatusSuccess,
-		Reason: decision.Reason,
+		Reason: strings.Join(evidence.Reasons, "；"),
 		Metadata: map[string]any{
-			"decision_action": string(decision.Action),
-			"planned_query":   decision.SearchPlan.Query,
+			"level": evidence.Level,
 		},
 	})
 }

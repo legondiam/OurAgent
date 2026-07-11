@@ -152,6 +152,10 @@ func TestBuildPlannerPromptForProbeResolved(t *testing.T) {
 				{DocumentName: "产品资料-龙井茶.md", SectionPath: "产地说明", Score: 0.82, ContentPreview: "龙井茶产地说明"},
 			},
 		},
+		ProbeEvidence: &ProbeEvidence{
+			Level:   ProbeEvidenceStrong,
+			Reasons: []string{"命中文档覆盖关键业务对象和问题主题"},
+		},
 	})
 
 	if !strings.Contains(prompt, "当前阶段：probe_resolved") {
@@ -169,20 +173,29 @@ func TestBuildPlannerPromptForProbeResolved(t *testing.T) {
 	if !strings.Contains(prompt, "产品资料-龙井茶.md") {
 		t.Fatal("expected probe hit")
 	}
-	if !strings.Contains(prompt, "通用解释、建议、示例或写作素材选择direct_answer") {
-		t.Fatal("expected probe miss direct_answer instruction")
+	if !strings.Contains(prompt, "probe有命中不等于可以进入完整RAG") {
+		t.Fatal("expected probe evidence boundary instruction")
 	}
-	if !strings.Contains(prompt, "缺少具体业务对象或范围选择clarify") {
+	if !strings.Contains(prompt, "关键产品、版本、系统、地区或对象没有被命中文档明确覆盖") {
 		t.Fatal("expected probe miss clarify instruction")
 	}
-	if !strings.Contains(prompt, "要求执行高风险操作选择reject") {
+	if !strings.Contains(prompt, "不要因为问题也像通用解释、建议、示例、话术或设计维度就direct_answer") {
+		t.Fatal("expected weak evidence clarify over direct instruction")
+	}
+	if !strings.Contains(prompt, "绕过审批、越权、伪造、隐藏审计") {
 		t.Fatal("expected probe miss reject instruction")
 	}
-	if !strings.Contains(prompt, "需要实时公开信息选择web_search") {
+	if !strings.Contains(prompt, "依赖实时公开信息、官方状态、最新公告、价格或API变化") {
 		t.Fatal("expected probe miss web_search instruction")
 	}
-	if !strings.Contains(prompt, "不要因为probe无命中就默认knowledge_search") {
-		t.Fatal("expected probe miss no default knowledge_search instruction")
+	if !strings.Contains(prompt, "服务端Probe证据判断") {
+		t.Fatal("expected probe evidence")
+	}
+	if !strings.Contains(prompt, "level：strong") {
+		t.Fatal("expected probe evidence level")
+	}
+	if !strings.Contains(prompt, "不要仅因为有相似文档命中就选择knowledge_search") {
+		t.Fatal("expected weak evidence no default knowledge_search instruction")
 	}
 }
 

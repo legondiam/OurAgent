@@ -247,13 +247,16 @@ func (s *AgentService) planWithKnowledgeProbe(ctx context.Context, req ChatReque
 		}
 	}
 
+	evidence := agent.EvaluateProbeEvidence(req.Question, result)
+	trace.MarkProbeEvidence(evidence)
 	defaults := s.defaultSearchPlan(result.Query)
 	input := agent.PlannerInput{
-		Stage:        agent.PlannerStageProbeResolved,
-		UserQuestion: req.Question,
-		Tools:        s.availableProbeResolvedTools(),
-		WebEnabled:   s.canUseWebSearch(),
-		ProbeResult:  &result,
+		Stage:         agent.PlannerStageProbeResolved,
+		UserQuestion:  req.Question,
+		Tools:         s.availableProbeResolvedTools(),
+		WebEnabled:    s.canUseWebSearch(),
+		ProbeResult:   &result,
+		ProbeEvidence: &evidence,
 	}
 	decision, err := s.planner.Plan(ctx, input)
 	if err != nil {

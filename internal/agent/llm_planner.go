@@ -268,9 +268,15 @@ func buildPlannerPrompt(input PlannerInput) string {
 		b.WriteString("知识库已经检索过一次，但结果低置信度。你只能选择clarify、web_search或reject，不要选择knowledge_probe、knowledge_search或direct_answer。\n\n")
 	} else if input.Stage == PlannerStageProbeResolved {
 		b.WriteString("已经完成知识库轻量探测。你只能选择direct_answer、clarify、knowledge_search、web_search或reject，不要选择knowledge_probe或context_lookup。\n")
-		b.WriteString("如果probe命中高相关企业文档，选择knowledge_search。\n")
-		b.WriteString("如果probe无明显命中：通用解释、建议、示例或写作素材选择direct_answer；缺少具体业务对象或范围选择clarify；要求执行高风险操作选择reject；需要实时公开信息选择web_search。\n")
-		b.WriteString("不要因为probe无命中就默认knowledge_search。\n\n")
+		b.WriteString("probe有命中不等于可以进入完整RAG。只有命中文档明确覆盖用户问题中的关键对象、版本、产品、政策范围和问题主题时，才选择knowledge_search。\n")
+		b.WriteString("如果probe命中只是相似主题或泛化概念，不要默认knowledge_search。\n")
+		b.WriteString("如果用户问题中的关键产品、版本、系统、地区或对象没有被命中文档明确覆盖，优先clarify。\n")
+		b.WriteString("但如果用户问题没有陌生产品名、陌生系统名或未知版本，且probe命中了明确企业制度、产品套餐、权限、安全、入职、报销、私有化、字段限制、同步失败等主题，即使服务端Probe证据判断为weak，也可以选择knowledge_search。\n")
+		b.WriteString("如果服务端Probe证据判断为weak或none，且用户问题带有具体产品、系统、平台、连接器、版本、客户范围或内部业务对象，优先clarify，不要因为问题也像通用解释、建议、示例、话术或设计维度就direct_answer。\n")
+		b.WriteString("只有在用户问题没有具体企业产品、系统、平台、连接器、版本或内部业务对象，且只是通用解释、建议、示例、话术、设计维度时，才优先direct_answer。\n")
+		b.WriteString("如果用户请求执行绕过审批、越权、伪造、隐藏审计、私下处理客户数据等高风险动作，优先reject。\n")
+		b.WriteString("如果用户问题依赖实时公开信息、官方状态、最新公告、价格或API变化，且probe没有明确内部资料，优先web_search。\n")
+		b.WriteString("如果服务端Probe证据判断为weak或none，不要仅因为有相似文档命中就选择knowledge_search。\n\n")
 	} else if input.Stage == PlannerStageContextResolved {
 		b.WriteString("已经读取会话历史。你可以选择knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
 		b.WriteString("如果选择knowledge_search，search_plan.query必须是结合会话历史后的独立完整问题。\n\n")
@@ -312,10 +318,30 @@ func buildPlannerPrompt(input PlannerInput) string {
 	if input.Context != nil {
 		writeConversationContext(&b, input.Context)
 	}
+	if input.ProbeEvidence != nil {
+		writeProbeEvidence(&b, input.ProbeEvidence)
+	}
 	if input.ProbeResult != nil {
 		writeKnowledgeProbeResult(&b, input.ProbeResult)
 	}
 	return b.String()
+}
+
+func writeProbeEvidence(b *strings.Builder, evidence *ProbeEvidence) {
+	b.WriteString("\n\n服务端Probe证据判断：\n")
+	b.WriteString("- level：")
+	b.WriteString(evidence.Level)
+	b.WriteString("\n- reasons：")
+	if len(evidence.Reasons) == 0 {
+		b.WriteString("[]\n")
+		return
+	}
+	b.WriteString("\n")
+	for _, reason := range evidence.Reasons {
+		b.WriteString("  - ")
+		b.WriteString(reason)
+		b.WriteString("\n")
+	}
 }
 
 func writeConversationContext(b *strings.Builder, context *ConversationContext) {

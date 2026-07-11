@@ -22,13 +22,14 @@ const (
 )
 
 type PlannerInput struct {
-	Stage        PlannerStage
-	UserQuestion string
-	Tools        []ToolSpec
-	WebEnabled   bool
-	Observation  *RetrievalObservation
-	Context      *ConversationContext
-	ProbeResult  *KnowledgeProbeResult
+	Stage         PlannerStage
+	UserQuestion  string
+	Tools         []ToolSpec
+	WebEnabled    bool
+	Observation   *RetrievalObservation
+	Context       *ConversationContext
+	ProbeResult   *KnowledgeProbeResult
+	ProbeEvidence *ProbeEvidence
 }
 
 type ToolSpec struct {
@@ -74,6 +75,17 @@ type KnowledgeProbeHit struct {
 	Score          float64
 	ContentPreview string
 }
+
+type ProbeEvidence struct {
+	Level   string   `json:"level"`
+	Reasons []string `json:"reasons"`
+}
+
+const (
+	ProbeEvidenceStrong = "strong"
+	ProbeEvidenceWeak   = "weak"
+	ProbeEvidenceNone   = "none"
+)
 
 type PostRAGPlanner struct{}
 
