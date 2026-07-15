@@ -150,7 +150,7 @@ func (s *DocumentService) Reindex(userID, docID uint64) (*model.Document, error)
 	if err != nil {
 		return nil, pkgerrors.WithStack(ErrDocumentNotFound)
 	}
-	if isDocumentIndexing(doc.Status) || doc.Status == model.DocumentStatusDeleting {
+	if isDocumentIndexing(doc.Status) || doc.Status == model.DocumentStatusDeleting || doc.Status == model.DocumentStatusInactive || doc.Status == model.DocumentStatusDeindexing {
 		return nil, pkgerrors.WithStack(ErrDocumentIndexing)
 	}
 	if err := s.docs.UpdateStatus(doc.ID, userID, model.DocumentStatusPending, "", 0); err != nil {

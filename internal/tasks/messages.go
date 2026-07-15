@@ -6,27 +6,32 @@ const (
 	TypeDocumentIndex         = "document.index"
 	TypeDocumentDeleteCleanup = "document.delete.cleanup"
 	TypeSourceSync            = "source.sync"
+	DeleteModeDeindex         = "deindex"
+	DeleteModeDelete          = "delete"
 )
 
 type DocumentIndexMessage struct {
-	EventID         string    `json:"event_id"`
-	Type            string    `json:"type"`
-	DocumentID      uint64    `json:"document_id"`
-	UserID          uint64    `json:"user_id"`
-	KnowledgeBaseID uint64    `json:"knowledge_base_id"`
-	Attempt         int       `json:"attempt"`
-	CreatedAt       time.Time `json:"created_at"`
+	EventID            string    `json:"event_id"`
+	Type               string    `json:"type"`
+	DocumentID         uint64    `json:"document_id"`
+	UserID             uint64    `json:"user_id"`
+	KnowledgeBaseID    uint64    `json:"knowledge_base_id"`
+	ExternalDocumentID uint64    `json:"external_document_id,omitempty"`
+	Attempt            int       `json:"attempt"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type DocumentDeleteCleanupMessage struct {
-	EventID         string    `json:"event_id"`
-	Type            string    `json:"type"`
-	DocumentID      uint64    `json:"document_id"`
-	UserID          uint64    `json:"user_id"`
-	KnowledgeBaseID uint64    `json:"knowledge_base_id"`
-	ObjectKey       string    `json:"object_key"`
-	Attempt         int       `json:"attempt"`
-	CreatedAt       time.Time `json:"created_at"`
+	EventID            string    `json:"event_id"`
+	Type               string    `json:"type"`
+	DocumentID         uint64    `json:"document_id"`
+	UserID             uint64    `json:"user_id"`
+	KnowledgeBaseID    uint64    `json:"knowledge_base_id"`
+	ObjectKey          string    `json:"object_key"`
+	ExternalDocumentID uint64    `json:"external_document_id,omitempty"`
+	Mode               string    `json:"mode,omitempty"`
+	Attempt            int       `json:"attempt"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type SourceSyncMessage struct {

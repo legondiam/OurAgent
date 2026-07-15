@@ -36,6 +36,18 @@ type Delivery struct {
 	nack func(bool, bool) error
 }
 
+func NewDelivery(body []byte, ack func() error, nack func(bool) error) Delivery {
+	return Delivery{
+		Body: body,
+		ack: func(bool) error {
+			return ack()
+		},
+		nack: func(_ bool, requeue bool) error {
+			return nack(requeue)
+		},
+	}
+}
+
 func NewRabbitMQClient(cfg config.RabbitMQConfig) (*Client, error) {
 	conn, err := amqp.Dial(cfg.URL)
 	if err != nil {

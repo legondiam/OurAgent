@@ -11,6 +11,8 @@ const (
 	DocumentStatusProcessing = "processing"
 	DocumentStatusCompleted  = "completed"
 	DocumentStatusFailed     = "failed"
+	DocumentStatusInactive   = "inactive"
+	DocumentStatusDeindexing = "deindexing"
 	DocumentStatusDeleting   = "deleting"
 )
 
@@ -61,6 +63,19 @@ type KnowledgeSource struct {
 	SyncStatus          string         `gorm:"size:32;index;not null" json:"sync_status"`
 	LastSyncAt          *time.Time     `json:"last_sync_at"`
 	NextSyncAt          *time.Time     `gorm:"index" json:"next_sync_at"`
+	SyncTaskID          string         `gorm:"size:64;index" json:"sync_task_id"`
+	SyncAttempt         int            `json:"sync_attempt"`
+	SyncStartedAt       *time.Time     `json:"sync_started_at"`
+	SyncFinishedAt      *time.Time     `json:"sync_finished_at"`
+	SyncLeaseUntil      *time.Time     `gorm:"index" json:"sync_lease_until"`
+	LastSyncDurationMS  int64          `json:"last_sync_duration_ms"`
+	LastScanCount       int            `json:"last_scan_count"`
+	LastCreatedCount    int            `json:"last_created_count"`
+	LastUpdatedCount    int            `json:"last_updated_count"`
+	LastUnchangedCount  int            `json:"last_unchanged_count"`
+	LastMissingCount    int            `json:"last_missing_count"`
+	LastDeletedCount    int            `json:"last_deleted_count"`
+	LastFailedCount     int            `json:"last_failed_count"`
 	LastError           string         `gorm:"type:text" json:"last_error"`
 	CreatedAt           time.Time      `json:"created_at"`
 	UpdatedAt           time.Time      `json:"updated_at"`
@@ -79,10 +94,24 @@ type ExternalDocument struct {
 	RemoteUpdatedAt *time.Time `json:"remote_updated_at"`
 	ContentHash     string     `gorm:"size:128" json:"content_hash"`
 	SyncStatus      string     `gorm:"size:32;index;not null" json:"sync_status"`
+	MissingCount    int        `json:"missing_count"`
+	MissingTaskID   string     `gorm:"size:64" json:"missing_task_id"`
+	LastMissingAt   *time.Time `json:"last_missing_at"`
 	LastSyncedAt    *time.Time `json:"last_synced_at"`
 	LastError       string     `gorm:"type:text" json:"last_error"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+type SourceSyncStats struct {
+	DurationMS     int64
+	ScanCount      int
+	CreatedCount   int
+	UpdatedCount   int
+	UnchangedCount int
+	MissingCount   int
+	DeletedCount   int
+	FailedCount    int
 }
 
 type Document struct {

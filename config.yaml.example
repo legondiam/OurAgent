@@ -76,6 +76,12 @@ rabbitmq:
   source_sync_workers: 1
   prefetch_count: 1
 
+source_sync:
+  scheduler_interval_seconds: 60
+  lease_seconds: 1800
+  schedule_batch_size: 100
+  delete_after_missing_syncs: 2
+
 web_search:
   enabled: true
   fallback_only: true

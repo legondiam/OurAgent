@@ -22,7 +22,9 @@ OurAgent是一个面向企业知识库场景的Go后端服务，提供文档接�
 - 知识库无答案时的联网搜索降级
 - RabbitMQ异步文档索引和删除清理任务
 - MinIO文档对象存储
-- Notion OAuth和外部知识源同步
+- Notion OAuth以及Notion/飞书外部知识源增量同步
+- 知识源定时调度、任务租约、失败重试和DLQ
+- 远端缺失文档分阶段下线索引并异步清理本地数据
 
 ## 技术栈
 
@@ -57,6 +59,8 @@ Gin API
   |     |
   |     +-- Notion / Feishu connectors
   |     +-- RabbitMQ source sync task
+  |     +-- Scheduled sync and lease recovery
+  |     +-- Deindex / delete cleanup
   |
   +-- Chat service
   |     |
@@ -268,6 +272,20 @@ jwt:
 - `config.yaml`：本地运行配置，已被Git忽略
 - `.env`：本地密钥，已被Git忽略
 - `config.yaml.example`：可公开的示例配置，会被Git跟踪
+
+知识源同步支持低精度定时扫描和租约恢复：
+
+```yaml
+source_sync:
+  scheduler_interval_seconds: 60
+  lease_seconds: 1800
+  schedule_batch_size: 100
+  delete_after_missing_syncs: 2
+```
+
+同步任务通过数据库`sync_task_id`和条件状态更新防止同一知识源并发执行。普通失败进入RabbitMQ延迟重试队列，超过上限后保留`failed`状态并进入DLQ；`failed`不会被定时调度器自动重启，需要用户手动触发恢复。服务异常退出后，调度器会重新抢占租约过期的`queued`或`syncing`任务。
+
+远端文档第一次在完整列表中缺失时会进入`missing`状态并异步删除Qdrant、Bluge和父子切片，使其不能继续被RAG检索，同时保留MinIO原文和Document记录。连续两次完整同步缺失后才执行物理删除；如果文档重新出现，则重新拉取并恢复索引。
 
 ## 开发
 

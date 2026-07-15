@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
+	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"OurAgent/internal/agent"
@@ -32,6 +36,8 @@ import (
 func main() {
 	logger.Init()
 	defer logger.Sync()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
@@ -97,23 +103,25 @@ func main() {
 	}
 	defer rabbitClient.Close()
 	taskProducer := tasks.NewProducer(rabbitClient)
-	indexConsumer := tasks.NewIndexConsumer(rabbitClient, documentRepo, indexer, cfg.Rabbit)
-	if err := indexConsumer.Start(context.Background(), cfg.Rabbit.IndexQueue); err != nil {
+	indexConsumer := tasks.NewIndexConsumer(rabbitClient, documentRepo, sourceRepo, indexer, cfg.Rabbit)
+	if err := indexConsumer.Start(ctx, cfg.Rabbit.IndexQueue); err != nil {
 		logger.Logger.Fatal("启动文档索引消费者失败", zap.Error(err))
 	}
-	deleteConsumer := tasks.NewDeleteConsumer(rabbitClient, documentRepo, chunkRepo, qdrant, keywordStore, minioClient, cfg.Rabbit)
-	if err := deleteConsumer.Start(context.Background(), cfg.Rabbit.DeleteQueue); err != nil {
+	deleteConsumer := tasks.NewDeleteConsumer(rabbitClient, documentRepo, sourceRepo, chunkRepo, qdrant, keywordStore, minioClient, cfg.Rabbit)
+	if err := deleteConsumer.Start(ctx, cfg.Rabbit.DeleteQueue); err != nil {
 		logger.Logger.Fatal("启动文档删除清理消费者失败", zap.Error(err))
 	}
 
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
 	documentService := service.NewDocumentService(documentRepo, kbRepo, taskProducer, minioClient)
-	sourceService := appsource.NewService(sourceRepo, kbRepo, documentRepo, minioClient, taskProducer)
-	sourceConsumer := appsource.NewConsumer(rabbitClient, sourceRepo, sourceService, cfg.Rabbit)
-	if err := sourceConsumer.Start(context.Background(), cfg.Rabbit.SourceSyncQueue); err != nil {
+	sourceService := appsource.NewService(sourceRepo, kbRepo, documentRepo, minioClient, taskProducer, cfg.Source)
+	sourceConsumer := appsource.NewConsumer(rabbitClient, sourceRepo, sourceService, cfg.Rabbit, cfg.Source)
+	if err := sourceConsumer.Start(ctx, cfg.Rabbit.SourceSyncQueue); err != nil {
 		logger.Logger.Fatal("启动知识源同步消费者失败", zap.Error(err))
 	}
+	sourceScheduler := appsource.NewScheduler(sourceRepo, taskProducer, cfg.Source)
+	sourceScheduler.Start(ctx)
 	var webFallback websearch.Answerer
 	if cfg.Web.Enabled {
 		webFallback = websearch.NewDashScopeAnswerer(cfg.Web)
@@ -145,7 +153,21 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	logger.Logger.Info("OurAgent 服务已启动", zap.String("addr", addr))
-	if err := r.Run(addr); err != nil {
-		logger.Logger.Fatal("启动服务失败", zap.Error(err))
+	server := &http.Server{Addr: addr, Handler: r}
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+	select {
+	case err := <-serverErr:
+		if err != nil && !stderrors.Is(err, http.ErrServerClosed) {
+			logger.Logger.Fatal("启动服务失败", zap.Error(err))
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Logger.Error("关闭HTTP服务失败", zap.Error(err))
+		}
 	}
 }

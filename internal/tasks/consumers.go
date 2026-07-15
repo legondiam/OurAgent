@@ -7,13 +7,9 @@ import (
 	"fmt"
 
 	"OurAgent/internal/config"
-	appdocument "OurAgent/internal/document"
 	"OurAgent/internal/model"
 	"OurAgent/internal/queue"
-	"OurAgent/internal/repository"
 	appsearch "OurAgent/internal/search"
-	"OurAgent/internal/storage"
-	"OurAgent/internal/vectorstore"
 	"OurAgent/pkg/logger"
 
 	"go.uber.org/zap"
@@ -30,34 +26,69 @@ type ConsumerOptions struct {
 
 type IndexConsumer struct {
 	queue   *queue.Client
-	docs    *repository.DocumentRepository
-	indexer *appdocument.Indexer
+	docs    taskDocumentRepository
+	sources taskSourceRepository
+	indexer taskIndexer
 	opts    ConsumerOptions
 }
 
 type DeleteConsumer struct {
 	queue   *queue.Client
-	docs    *repository.DocumentRepository
-	chunks  *repository.ChunkRepository
-	qdrant  *vectorstore.QdrantClient
+	docs    taskDocumentRepository
+	chunks  taskChunkRepository
+	qdrant  taskVectorStore
 	keyword appsearch.KeywordStore
-	minio   *storage.MinIOClient
+	minio   taskObjectStore
+	sources taskSourceRepository
 	opts    ConsumerOptions
 }
 
-func NewIndexConsumer(q *queue.Client, docs *repository.DocumentRepository, indexer *appdocument.Indexer, cfg config.RabbitMQConfig) *IndexConsumer {
+type taskDocumentRepository interface {
+	FindByIDAndUserID(id, userID uint64) (*model.Document, error)
+	DeleteByIDAndUserID(id, userID uint64) error
+	UpdateStatus(id, userID uint64, status, message string, chunkCount int) error
+	MarkDeindexing(id, userID uint64) (bool, error)
+	UpdateStatusIfCurrent(id, userID uint64, currentStatus, status, message string, chunkCount int) (bool, error)
+}
+
+type taskSourceRepository interface {
+	MarkExternalDocumentSynced(id, documentID uint64) error
+	MarkExternalDocumentDeindexed(id, documentID uint64) error
+	MarkExternalDocumentFailed(id, documentID uint64, message string) error
+	MarkExternalDocumentDeleted(id, documentID uint64) error
+}
+
+type taskChunkRepository interface {
+	DeleteByDocumentID(userID, documentID uint64) error
+}
+
+type taskIndexer interface {
+	Index(ctx context.Context, documentID uint64) error
+}
+
+type taskVectorStore interface {
+	DeleteByDocument(ctx context.Context, userID, knowledgeBaseID, documentID uint64) error
+}
+
+type taskObjectStore interface {
+	DeleteObject(ctx context.Context, objectKey string) error
+}
+
+func NewIndexConsumer(q *queue.Client, docs taskDocumentRepository, sources taskSourceRepository, indexer taskIndexer, cfg config.RabbitMQConfig) *IndexConsumer {
 	return &IndexConsumer{
 		queue:   q,
 		docs:    docs,
+		sources: sources,
 		indexer: indexer,
 		opts:    optionsFromConfig(cfg),
 	}
 }
 
-func NewDeleteConsumer(q *queue.Client, docs *repository.DocumentRepository, chunks *repository.ChunkRepository, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, minio *storage.MinIOClient, cfg config.RabbitMQConfig) *DeleteConsumer {
+func NewDeleteConsumer(q *queue.Client, docs taskDocumentRepository, sources taskSourceRepository, chunks taskChunkRepository, qdrant taskVectorStore, keyword appsearch.KeywordStore, minio taskObjectStore, cfg config.RabbitMQConfig) *DeleteConsumer {
 	return &DeleteConsumer{
 		queue:   q,
 		docs:    docs,
+		sources: sources,
 		chunks:  chunks,
 		qdrant:  qdrant,
 		keyword: keyword,
@@ -116,26 +147,60 @@ func (c *IndexConsumer) handle(ctx context.Context, msg DocumentIndexMessage) er
 	doc, err := c.docs.FindByIDAndUserID(msg.DocumentID, msg.UserID)
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			if msg.ExternalDocumentID != 0 {
+				_ = c.sources.MarkExternalDocumentFailed(msg.ExternalDocumentID, msg.DocumentID, "本地文档不存在")
+			}
 			return nil
 		}
 		return err
 	}
-	if doc.Status == model.DocumentStatusDeleting || doc.Status != model.DocumentStatusPending {
+	if doc.Status == model.DocumentStatusCompleted {
+		if msg.ExternalDocumentID != 0 {
+			return c.sources.MarkExternalDocumentSynced(msg.ExternalDocumentID, msg.DocumentID)
+		}
 		return nil
 	}
-	return c.indexer.Index(ctx, msg.DocumentID)
+	if doc.Status == model.DocumentStatusDeleting || doc.Status == model.DocumentStatusInactive || doc.Status != model.DocumentStatusPending {
+		return nil
+	}
+	if err := c.indexer.Index(ctx, msg.DocumentID); err != nil {
+		return err
+	}
+	if msg.ExternalDocumentID != 0 {
+		return c.sources.MarkExternalDocumentSynced(msg.ExternalDocumentID, msg.DocumentID)
+	}
+	return nil
 }
 
 func (c *DeleteConsumer) handle(ctx context.Context, msg DocumentDeleteCleanupMessage) error {
+	mode := msg.Mode
+	if mode == "" {
+		mode = DeleteModeDelete
+	}
 	doc, err := c.docs.FindByIDAndUserID(msg.DocumentID, msg.UserID)
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			if mode == DeleteModeDelete && msg.ExternalDocumentID != 0 {
+				return c.sources.MarkExternalDocumentDeleted(msg.ExternalDocumentID, msg.DocumentID)
+			}
 			return nil
 		}
 		return err
 	}
-	if doc.Status != model.DocumentStatusDeleting {
+	if mode == DeleteModeDeindex && doc.Status != model.DocumentStatusInactive {
 		return nil
+	}
+	if mode == DeleteModeDelete && doc.Status != model.DocumentStatusDeleting {
+		return nil
+	}
+	if mode == DeleteModeDeindex {
+		claimed, err := c.docs.MarkDeindexing(doc.ID, doc.UserID)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return nil
+		}
 	}
 	if err := c.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
 		return err
@@ -148,6 +213,15 @@ func (c *DeleteConsumer) handle(ctx context.Context, msg DocumentDeleteCleanupMe
 	if err := c.chunks.DeleteByDocumentID(doc.UserID, doc.ID); err != nil {
 		return err
 	}
+	if mode == DeleteModeDeindex {
+		if _, err := c.docs.UpdateStatusIfCurrent(doc.ID, doc.UserID, model.DocumentStatusDeindexing, model.DocumentStatusInactive, "", 0); err != nil {
+			return err
+		}
+		if msg.ExternalDocumentID != 0 {
+			return c.sources.MarkExternalDocumentDeindexed(msg.ExternalDocumentID, msg.DocumentID)
+		}
+		return nil
+	}
 	objectKey := doc.ObjectKey
 	if objectKey == "" {
 		objectKey = msg.ObjectKey
@@ -157,9 +231,15 @@ func (c *DeleteConsumer) handle(ctx context.Context, msg DocumentDeleteCleanupMe
 	}
 	if err := c.docs.DeleteByIDAndUserID(doc.ID, doc.UserID); err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			if msg.ExternalDocumentID != 0 {
+				return c.sources.MarkExternalDocumentDeleted(msg.ExternalDocumentID, msg.DocumentID)
+			}
 			return nil
 		}
 		return err
+	}
+	if msg.ExternalDocumentID != 0 {
+		return c.sources.MarkExternalDocumentDeleted(msg.ExternalDocumentID, msg.DocumentID)
 	}
 	return nil
 }
@@ -170,12 +250,21 @@ func (c *IndexConsumer) retryIndex(ctx context.Context, d queue.Delivery, msg Do
 	if next <= c.opts.MaxRetries {
 		_ = c.docs.UpdateStatus(msg.DocumentID, msg.UserID, model.DocumentStatusPending, "索引失败，等待重试: "+err.Error(), 0)
 	}
+	if msg.ExternalDocumentID != 0 {
+		_ = c.sources.MarkExternalDocumentFailed(msg.ExternalDocumentID, msg.DocumentID, err.Error())
+	}
 	c.retry(ctx, d, queue.DocumentIndexRetryRoutingKey, queue.DocumentIndexDLQRoutingKey, msg, next, err, "索引任务执行失败")
 }
 
 func (c *DeleteConsumer) retryDelete(ctx context.Context, d queue.Delivery, msg DocumentDeleteCleanupMessage, err error) {
 	next := msg.Attempt + 1
 	msg.Attempt = next
+	if msg.ExternalDocumentID != 0 {
+		_ = c.sources.MarkExternalDocumentFailed(msg.ExternalDocumentID, msg.DocumentID, err.Error())
+	}
+	if msg.Mode == DeleteModeDeindex {
+		_, _ = c.docs.UpdateStatusIfCurrent(msg.DocumentID, msg.UserID, model.DocumentStatusDeindexing, model.DocumentStatusInactive, err.Error(), 0)
+	}
 	c.retry(ctx, d, queue.DocumentDeleteRetryRoutingKey, queue.DocumentDeleteDLQRoutingKey, msg, next, err, "删除清理任务执行失败")
 }
 

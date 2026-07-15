@@ -10,18 +10,19 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig    `yaml:"server" mapstructure:"server"`
-	MySQL  MySQLConfig     `yaml:"mysql" mapstructure:"mysql"`
-	Qdrant QdrantConfig    `yaml:"qdrant" mapstructure:"qdrant"`
-	MinIO  MinIOConfig     `yaml:"minio" mapstructure:"minio"`
-	LLM    LLMConfig       `yaml:"llm" mapstructure:"llm"`
-	RAG    RAGConfig       `yaml:"rag" mapstructure:"rag"`
-	Rerank RerankConfig    `yaml:"rerank" mapstructure:"rerank"`
-	JWT    JWTConfig       `yaml:"jwt" mapstructure:"jwt"`
-	Search SearchConfig    `yaml:"search" mapstructure:"search"`
-	Rabbit RabbitMQConfig  `yaml:"rabbitmq" mapstructure:"rabbitmq"`
-	Web    WebSearchConfig `yaml:"web_search" mapstructure:"web_search"`
-	OAuth  OAuthConfig     `yaml:"oauth" mapstructure:"oauth"`
+	Server ServerConfig     `yaml:"server" mapstructure:"server"`
+	MySQL  MySQLConfig      `yaml:"mysql" mapstructure:"mysql"`
+	Qdrant QdrantConfig     `yaml:"qdrant" mapstructure:"qdrant"`
+	MinIO  MinIOConfig      `yaml:"minio" mapstructure:"minio"`
+	LLM    LLMConfig        `yaml:"llm" mapstructure:"llm"`
+	RAG    RAGConfig        `yaml:"rag" mapstructure:"rag"`
+	Rerank RerankConfig     `yaml:"rerank" mapstructure:"rerank"`
+	JWT    JWTConfig        `yaml:"jwt" mapstructure:"jwt"`
+	Search SearchConfig     `yaml:"search" mapstructure:"search"`
+	Rabbit RabbitMQConfig   `yaml:"rabbitmq" mapstructure:"rabbitmq"`
+	Source SourceSyncConfig `yaml:"source_sync" mapstructure:"source_sync"`
+	Web    WebSearchConfig  `yaml:"web_search" mapstructure:"web_search"`
+	OAuth  OAuthConfig      `yaml:"oauth" mapstructure:"oauth"`
 }
 
 type ServerConfig struct {
@@ -104,6 +105,13 @@ type RabbitMQConfig struct {
 	DeleteWorkers     int    `yaml:"delete_workers" mapstructure:"delete_workers"`
 	SourceSyncWorkers int    `yaml:"source_sync_workers" mapstructure:"source_sync_workers"`
 	PrefetchCount     int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
+}
+
+type SourceSyncConfig struct {
+	SchedulerIntervalSeconds int `yaml:"scheduler_interval_seconds" mapstructure:"scheduler_interval_seconds"`
+	LeaseSeconds             int `yaml:"lease_seconds" mapstructure:"lease_seconds"`
+	ScheduleBatchSize        int `yaml:"schedule_batch_size" mapstructure:"schedule_batch_size"`
+	DeleteAfterMissingSyncs  int `yaml:"delete_after_missing_syncs" mapstructure:"delete_after_missing_syncs"`
 }
 
 type WebSearchConfig struct {
@@ -195,6 +203,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.delete_workers", 2)
 	v.SetDefault("rabbitmq.source_sync_workers", 1)
 	v.SetDefault("rabbitmq.prefetch_count", 1)
+	v.SetDefault("source_sync.scheduler_interval_seconds", 60)
+	v.SetDefault("source_sync.lease_seconds", 1800)
+	v.SetDefault("source_sync.schedule_batch_size", 100)
+	v.SetDefault("source_sync.delete_after_missing_syncs", 2)
 	v.SetDefault("web_search.enabled", true)
 	v.SetDefault("web_search.fallback_only", true)
 	v.SetDefault("web_search.provider", "dashscope")
@@ -246,6 +258,10 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rabbitmq.delete_workers", "RABBITMQ_DELETE_WORKERS")
 	_ = v.BindEnv("rabbitmq.source_sync_workers", "RABBITMQ_SOURCE_SYNC_WORKERS")
 	_ = v.BindEnv("rabbitmq.prefetch_count", "RABBITMQ_PREFETCH_COUNT")
+	_ = v.BindEnv("source_sync.scheduler_interval_seconds", "SOURCE_SYNC_SCHEDULER_INTERVAL_SECONDS")
+	_ = v.BindEnv("source_sync.lease_seconds", "SOURCE_SYNC_LEASE_SECONDS")
+	_ = v.BindEnv("source_sync.schedule_batch_size", "SOURCE_SYNC_SCHEDULE_BATCH_SIZE")
+	_ = v.BindEnv("source_sync.delete_after_missing_syncs", "SOURCE_SYNC_DELETE_AFTER_MISSING_SYNCS")
 	_ = v.BindEnv("web_search.enabled", "WEB_SEARCH_ENABLED")
 	_ = v.BindEnv("web_search.fallback_only", "WEB_SEARCH_FALLBACK_ONLY")
 	_ = v.BindEnv("web_search.provider", "WEB_SEARCH_PROVIDER")
@@ -353,6 +369,18 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Rabbit.PrefetchCount <= 0 {
 		cfg.Rabbit.PrefetchCount = 1
+	}
+	if cfg.Source.SchedulerIntervalSeconds <= 0 {
+		cfg.Source.SchedulerIntervalSeconds = 60
+	}
+	if cfg.Source.LeaseSeconds <= 0 {
+		cfg.Source.LeaseSeconds = 1800
+	}
+	if cfg.Source.ScheduleBatchSize <= 0 {
+		cfg.Source.ScheduleBatchSize = 100
+	}
+	if cfg.Source.DeleteAfterMissingSyncs < 2 {
+		cfg.Source.DeleteAfterMissingSyncs = 2
 	}
 	if cfg.Web.Provider == "" {
 		cfg.Web.Provider = "dashscope"

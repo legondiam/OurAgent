@@ -107,3 +107,52 @@ func (r *DocumentRepository) UpdateSyncedDocument(doc *model.Document) error {
 	}
 	return nil
 }
+
+// UpdateSyncedDocumentIfStatus按当前状态更新同步文档
+func (r *DocumentRepository) UpdateSyncedDocumentIfStatus(doc *model.Document, currentStatus string) (bool, error) {
+	updates := map[string]interface{}{
+		"filename":      doc.Filename,
+		"file_type":     doc.FileType,
+		"file_path":     doc.FilePath,
+		"bucket_name":   doc.BucketName,
+		"object_key":    doc.ObjectKey,
+		"file_size":     doc.FileSize,
+		"content_type":  doc.ContentType,
+		"status":        doc.Status,
+		"error_message": doc.ErrorMessage,
+		"chunk_count":   doc.ChunkCount,
+	}
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND user_id = ? AND status = ?", doc.ID, doc.UserID, currentStatus).
+		Updates(updates)
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "按状态更新同步文档失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// MarkDeindexing抢占文档下线任务
+func (r *DocumentRepository) MarkDeindexing(id, userID uint64) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND user_id = ? AND status = ?", id, userID, model.DocumentStatusInactive).
+		Update("status", model.DocumentStatusDeindexing)
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "抢占文档下线任务失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// UpdateStatusIfCurrent按当前状态更新文档状态
+func (r *DocumentRepository) UpdateStatusIfCurrent(id, userID uint64, currentStatus, status, message string, chunkCount int) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND user_id = ? AND status = ?", id, userID, currentStatus).
+		Updates(map[string]interface{}{
+			"status":        status,
+			"error_message": message,
+			"chunk_count":   chunkCount,
+		})
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "按当前状态更新文档失败")
+	}
+	return result.RowsAffected > 0, nil
+}
