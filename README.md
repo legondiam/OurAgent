@@ -273,6 +273,17 @@ jwt:
 - `.env`：本地密钥，已被Git忽略
 - `config.yaml.example`：可公开的示例配置，会被Git跟踪
 
+文档索引任务使用数据库执行令牌和长租约恢复Consumer宕机后遗留的`processing`状态：
+
+```yaml
+rabbitmq:
+  retry_delay_seconds: 30
+  max_retries: 5
+  index_lease_seconds: 1800
+```
+
+同一文档通过条件更新原子抢占。租约有效时，重复消息进入延迟队列等待且不增加失败次数；租约过期后，新Consumer使用新的执行令牌抢占任务，并按`document_id`清理旧切片、向量和关键词索引后完整重建。已经`completed`但尚未ACK的消息重新投递时会直接幂等完成，不会重复索引。
+
 知识源同步支持低精度定时扫描和租约恢复：
 
 ```yaml

@@ -1,11 +1,16 @@
 package repository
 
 import (
+	stderrors "errors"
+	"time"
+
 	"OurAgent/internal/model"
 
 	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
+
+var ErrDocumentIndexLeaseLost = stderrors.New("文档索引租约已失效")
 
 type DocumentRepository struct {
 	db *gorm.DB
@@ -83,6 +88,13 @@ func (r *DocumentRepository) UpdateStatus(id, userID uint64, status, message str
 		"error_message": message,
 		"chunk_count":   chunkCount,
 	}
+	if status != model.DocumentStatusProcessing {
+		updates["index_lease_until"] = nil
+	}
+	if status == model.DocumentStatusPending {
+		updates["index_task_id"] = ""
+		updates["index_attempt"] = 0
+	}
 	if err := r.db.Model(&model.Document{}).Where("id = ? AND user_id = ?", id, userID).Updates(updates).Error; err != nil {
 		return pkgerrors.WithMessage(err, "更新文档状态失败")
 	}
@@ -91,16 +103,21 @@ func (r *DocumentRepository) UpdateStatus(id, userID uint64, status, message str
 
 func (r *DocumentRepository) UpdateSyncedDocument(doc *model.Document) error {
 	updates := map[string]interface{}{
-		"filename":      doc.Filename,
-		"file_type":     doc.FileType,
-		"file_path":     doc.FilePath,
-		"bucket_name":   doc.BucketName,
-		"object_key":    doc.ObjectKey,
-		"file_size":     doc.FileSize,
-		"content_type":  doc.ContentType,
-		"status":        doc.Status,
-		"error_message": doc.ErrorMessage,
-		"chunk_count":   doc.ChunkCount,
+		"filename":          doc.Filename,
+		"file_type":         doc.FileType,
+		"file_path":         doc.FilePath,
+		"bucket_name":       doc.BucketName,
+		"object_key":        doc.ObjectKey,
+		"file_size":         doc.FileSize,
+		"content_type":      doc.ContentType,
+		"status":            doc.Status,
+		"error_message":     doc.ErrorMessage,
+		"chunk_count":       doc.ChunkCount,
+		"index_lease_until": nil,
+	}
+	if doc.Status == model.DocumentStatusPending {
+		updates["index_task_id"] = ""
+		updates["index_attempt"] = 0
 	}
 	if err := r.db.Model(&model.Document{}).Where("id = ? AND user_id = ?", doc.ID, doc.UserID).Updates(updates).Error; err != nil {
 		return pkgerrors.WithMessage(err, "更新同步文档失败")
@@ -111,22 +128,117 @@ func (r *DocumentRepository) UpdateSyncedDocument(doc *model.Document) error {
 // UpdateSyncedDocumentIfStatus按当前状态更新同步文档
 func (r *DocumentRepository) UpdateSyncedDocumentIfStatus(doc *model.Document, currentStatus string) (bool, error) {
 	updates := map[string]interface{}{
-		"filename":      doc.Filename,
-		"file_type":     doc.FileType,
-		"file_path":     doc.FilePath,
-		"bucket_name":   doc.BucketName,
-		"object_key":    doc.ObjectKey,
-		"file_size":     doc.FileSize,
-		"content_type":  doc.ContentType,
-		"status":        doc.Status,
-		"error_message": doc.ErrorMessage,
-		"chunk_count":   doc.ChunkCount,
+		"filename":          doc.Filename,
+		"file_type":         doc.FileType,
+		"file_path":         doc.FilePath,
+		"bucket_name":       doc.BucketName,
+		"object_key":        doc.ObjectKey,
+		"file_size":         doc.FileSize,
+		"content_type":      doc.ContentType,
+		"status":            doc.Status,
+		"error_message":     doc.ErrorMessage,
+		"chunk_count":       doc.ChunkCount,
+		"index_lease_until": nil,
+	}
+	if doc.Status == model.DocumentStatusPending {
+		updates["index_task_id"] = ""
+		updates["index_attempt"] = 0
 	}
 	result := r.db.Model(&model.Document{}).
 		Where("id = ? AND user_id = ? AND status = ?", doc.ID, doc.UserID, currentStatus).
 		Updates(updates)
 	if result.Error != nil {
 		return false, pkgerrors.WithMessage(result.Error, "按状态更新同步文档失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// ClaimDocumentIndex抢占文档索引任务
+func (r *DocumentRepository) ClaimDocumentIndex(id, userID uint64, taskID string, attempt int, now, leaseUntil time.Time) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND user_id = ?", id, userID).
+		Where("status = ? OR (status = ? AND (index_lease_until IS NULL OR index_lease_until <= ?))", model.DocumentStatusPending, model.DocumentStatusProcessing, now).
+		Updates(map[string]interface{}{
+			"status":            model.DocumentStatusProcessing,
+			"index_task_id":     taskID,
+			"index_attempt":     attempt,
+			"index_lease_until": &leaseUntil,
+			"error_message":     "",
+			"chunk_count":       0,
+		})
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "抢占文档索引任务失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// CompleteDocumentIndex提交文档索引完成状态
+func (r *DocumentRepository) CompleteDocumentIndex(id uint64, taskID string, chunkCount int) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND status = ? AND index_task_id = ?", id, model.DocumentStatusProcessing, taskID).
+		Updates(map[string]interface{}{
+			"status":            model.DocumentStatusCompleted,
+			"error_message":     "",
+			"chunk_count":       chunkCount,
+			"index_lease_until": nil,
+		})
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "提交文档索引完成状态失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// FailDocumentIndex提交文档索引失败状态
+func (r *DocumentRepository) FailDocumentIndex(id uint64, taskID, message string) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND status = ? AND index_task_id = ?", id, model.DocumentStatusProcessing, taskID).
+		Updates(map[string]interface{}{
+			"status":            model.DocumentStatusFailed,
+			"error_message":     message,
+			"chunk_count":       0,
+			"index_lease_until": nil,
+		})
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "提交文档索引失败状态失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// RequeueDocumentIndex重排当前文档索引任务
+func (r *DocumentRepository) RequeueDocumentIndex(id, userID uint64, taskID string, attempt int, message string) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND user_id = ? AND index_task_id = ? AND status IN ?", id, userID, taskID, []string{
+			model.DocumentStatusProcessing,
+			model.DocumentStatusFailed,
+		}).
+		Updates(map[string]interface{}{
+			"status":            model.DocumentStatusPending,
+			"index_attempt":     attempt,
+			"error_message":     message,
+			"chunk_count":       0,
+			"index_lease_until": nil,
+		})
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "重排文档索引任务失败")
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// FinalizeDocumentIndexFailure记录索引失败终态
+func (r *DocumentRepository) FinalizeDocumentIndexFailure(id, userID uint64, taskID string, attempt int, message string) (bool, error) {
+	result := r.db.Model(&model.Document{}).
+		Where("id = ? AND user_id = ? AND index_task_id = ? AND status IN ?", id, userID, taskID, []string{
+			model.DocumentStatusProcessing,
+			model.DocumentStatusFailed,
+		}).
+		Updates(map[string]interface{}{
+			"status":            model.DocumentStatusFailed,
+			"index_attempt":     attempt,
+			"error_message":     message,
+			"index_lease_until": nil,
+		})
+	if result.Error != nil {
+		return false, pkgerrors.WithMessage(result.Error, "记录文档索引失败终态失败")
 	}
 	return result.RowsAffected > 0, nil
 }
@@ -144,13 +256,17 @@ func (r *DocumentRepository) MarkDeindexing(id, userID uint64) (bool, error) {
 
 // UpdateStatusIfCurrent按当前状态更新文档状态
 func (r *DocumentRepository) UpdateStatusIfCurrent(id, userID uint64, currentStatus, status, message string, chunkCount int) (bool, error) {
+	updates := map[string]interface{}{
+		"status":        status,
+		"error_message": message,
+		"chunk_count":   chunkCount,
+	}
+	if status != model.DocumentStatusProcessing {
+		updates["index_lease_until"] = nil
+	}
 	result := r.db.Model(&model.Document{}).
 		Where("id = ? AND user_id = ? AND status = ?", id, userID, currentStatus).
-		Updates(map[string]interface{}{
-			"status":        status,
-			"error_message": message,
-			"chunk_count":   chunkCount,
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return false, pkgerrors.WithMessage(result.Error, "按当前状态更新文档失败")
 	}

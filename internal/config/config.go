@@ -101,6 +101,7 @@ type RabbitMQConfig struct {
 	SourceSyncQueue   string `yaml:"source_sync_queue" mapstructure:"source_sync_queue"`
 	RetryDelaySeconds int    `yaml:"retry_delay_seconds" mapstructure:"retry_delay_seconds"`
 	MaxRetries        int    `yaml:"max_retries" mapstructure:"max_retries"`
+	IndexLeaseSeconds int    `yaml:"index_lease_seconds" mapstructure:"index_lease_seconds"`
 	IndexWorkers      int    `yaml:"index_workers" mapstructure:"index_workers"`
 	DeleteWorkers     int    `yaml:"delete_workers" mapstructure:"delete_workers"`
 	SourceSyncWorkers int    `yaml:"source_sync_workers" mapstructure:"source_sync_workers"`
@@ -199,6 +200,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.source_sync_queue", "ouragent.source.sync")
 	v.SetDefault("rabbitmq.retry_delay_seconds", 30)
 	v.SetDefault("rabbitmq.max_retries", 5)
+	v.SetDefault("rabbitmq.index_lease_seconds", 1800)
 	v.SetDefault("rabbitmq.index_workers", 2)
 	v.SetDefault("rabbitmq.delete_workers", 2)
 	v.SetDefault("rabbitmq.source_sync_workers", 1)
@@ -254,6 +256,7 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rabbitmq.source_sync_queue", "RABBITMQ_SOURCE_SYNC_QUEUE")
 	_ = v.BindEnv("rabbitmq.retry_delay_seconds", "RABBITMQ_RETRY_DELAY_SECONDS")
 	_ = v.BindEnv("rabbitmq.max_retries", "RABBITMQ_MAX_RETRIES")
+	_ = v.BindEnv("rabbitmq.index_lease_seconds", "RABBITMQ_INDEX_LEASE_SECONDS")
 	_ = v.BindEnv("rabbitmq.index_workers", "RABBITMQ_INDEX_WORKERS")
 	_ = v.BindEnv("rabbitmq.delete_workers", "RABBITMQ_DELETE_WORKERS")
 	_ = v.BindEnv("rabbitmq.source_sync_workers", "RABBITMQ_SOURCE_SYNC_WORKERS")
@@ -357,6 +360,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Rabbit.MaxRetries <= 0 {
 		cfg.Rabbit.MaxRetries = 5
+	}
+	if cfg.Rabbit.IndexLeaseSeconds <= 0 {
+		cfg.Rabbit.IndexLeaseSeconds = 1800
 	}
 	if cfg.Rabbit.IndexWorkers <= 0 {
 		cfg.Rabbit.IndexWorkers = 2

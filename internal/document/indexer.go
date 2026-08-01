@@ -8,6 +8,7 @@ import (
 
 	"OurAgent/internal/config"
 	"OurAgent/internal/model"
+	"OurAgent/internal/repository"
 	appsearch "OurAgent/internal/search"
 	"OurAgent/internal/storage"
 	"OurAgent/internal/vectorstore"
@@ -18,6 +19,7 @@ import (
 
 type Indexer struct {
 	db       *gorm.DB
+	docs     *repository.DocumentRepository
 	qdrant   *vectorstore.QdrantClient
 	keyword  appsearch.KeywordStore
 	minio    *storage.MinIOClient
@@ -26,65 +28,51 @@ type Indexer struct {
 }
 
 func NewIndexer(db *gorm.DB, qdrant *vectorstore.QdrantClient, keyword appsearch.KeywordStore, minio *storage.MinIOClient, embedder embedding.Embedder, cfg *config.Config) *Indexer {
-	return &Indexer{db: db, qdrant: qdrant, keyword: keyword, minio: minio, embedder: embedder, cfg: cfg}
+	return &Indexer{db: db, docs: repository.NewDocumentRepository(db), qdrant: qdrant, keyword: keyword, minio: minio, embedder: embedder, cfg: cfg}
 }
 
 // Index 执行文档解析切片向量化和索引写入
-func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
+func (i *Indexer) Index(ctx context.Context, documentID uint64, taskID string) error {
 	var doc model.Document
 	if err := i.db.First(&doc, documentID).Error; err != nil {
 		return err
 	}
 
-	if doc.Status != model.DocumentStatusPending {
-		return nil
-	}
-	locked, err := i.markProcessing(doc.ID)
-	if err != nil {
-		return err
-	}
-	if !locked {
-		return nil
+	if doc.Status != model.DocumentStatusProcessing || doc.IndexTaskID != taskID {
+		return repository.ErrDocumentIndexLeaseLost
 	}
 
 	if err := i.qdrant.DeleteByDocument(ctx, doc.UserID, doc.KnowledgeBaseID, doc.ID); err != nil {
-		i.fail(doc.ID, fmt.Sprintf("删除旧向量失败: %v", err))
-		return err
+		return i.fail(doc.ID, taskID, "删除旧向量失败", err)
 	}
 	if i.keyword != nil {
 		if err := i.keyword.DeleteByDocumentID(ctx, doc.UserID, doc.ID); err != nil {
-			i.fail(doc.ID, fmt.Sprintf("删除旧关键词索引失败: %v", err))
-			return err
+			return i.fail(doc.ID, taskID, "删除旧关键词索引失败", err)
 		}
 	}
 
 	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentChildChunk{}).Error; err != nil {
-		i.fail(doc.ID, fmt.Sprintf("删除旧子 chunk 失败: %v", err))
-		return err
+		return i.fail(doc.ID, taskID, "删除旧子chunk失败", err)
 	}
 	if err := i.db.Where("document_id = ?", doc.ID).Delete(&model.DocumentParentChunk{}).Error; err != nil {
-		i.fail(doc.ID, fmt.Sprintf("删除旧父 chunk 失败: %v", err))
-		return err
+		return i.fail(doc.ID, taskID, "删除旧父chunk失败", err)
 	}
 
 	reader, err := i.minio.GetObject(ctx, doc.ObjectKey)
 	if err != nil {
-		i.fail(doc.ID, fmt.Sprintf("读取原始文档失败: %v", err))
-		return err
+		return i.fail(doc.ID, taskID, "读取原始文档失败", err)
 	}
 	defer reader.Close()
 
 	text, err := ParseReader(ctx, doc.Filename, reader)
 	if err != nil {
-		i.fail(doc.ID, fmt.Sprintf("解析文档失败: %v", err))
-		return err
+		return i.fail(doc.ID, taskID, "解析文档失败", err)
 	}
 	text = NormalizeText(text)
 	chunks := SplitDocument(doc.Filename, text, i.cfg.RAG.ChunkSize, i.cfg.RAG.ChunkOverlap)
 	if len(chunks) == 0 {
 		err := fmt.Errorf("文档没有可索引文本")
-		i.fail(doc.ID, err.Error())
-		return err
+		return i.fail(doc.ID, taskID, err.Error(), err)
 	}
 
 	childCount := 0
@@ -99,24 +87,20 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 			TokenCount:      parent.TokenCount,
 		}
 		if err := i.db.Create(&parentChunk).Error; err != nil {
-			i.fail(doc.ID, fmt.Sprintf("保存父 chunk 失败: %v", err))
-			return err
+			return i.fail(doc.ID, taskID, "保存父chunk失败", err)
 		}
 
 		for childIdx, child := range parent.Children {
 			vectors, err := i.embedder.EmbedStrings(ctx, []string{embeddingText(child)})
 			if err != nil {
-				i.fail(doc.ID, fmt.Sprintf("生成 embedding 失败: %v", err))
-				return err
+				return i.fail(doc.ID, taskID, "生成embedding失败", err)
 			}
 			if len(vectors) == 0 || len(vectors[0]) == 0 {
 				err := fmt.Errorf("embedding 结果为空")
-				i.fail(doc.ID, err.Error())
-				return err
+				return i.fail(doc.ID, taskID, err.Error(), err)
 			}
 			if err := i.qdrant.EnsureCollection(ctx, len(vectors[0])); err != nil {
-				i.fail(doc.ID, fmt.Sprintf("初始化向量集合失败: %v", err))
-				return err
+				return i.fail(doc.ID, taskID, "初始化向量集合失败", err)
 			}
 
 			childChunk := model.DocumentChildChunk{
@@ -130,8 +114,7 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 				TokenCount:      child.TokenCount,
 			}
 			if err := i.db.Create(&childChunk).Error; err != nil {
-				i.fail(doc.ID, fmt.Sprintf("保存子 chunk 失败: %v", err))
-				return err
+				return i.fail(doc.ID, taskID, "保存子chunk失败", err)
 			}
 
 			payload := map[string]interface{}{
@@ -146,26 +129,30 @@ func (i *Indexer) Index(ctx context.Context, documentID uint64) error {
 				"section_path":      child.SectionPath,
 			}
 			if err := i.qdrant.Upsert(ctx, childChunk.ID, vectors[0], payload); err != nil {
-				i.fail(doc.ID, fmt.Sprintf("写入向量库失败: %v", err))
-				return err
+				return i.fail(doc.ID, taskID, "写入向量库失败", err)
 			}
 
 			childChunk.VectorID = strconv.FormatUint(childChunk.ID, 10)
 			if err := i.db.Model(&childChunk).Update("vector_id", childChunk.VectorID).Error; err != nil {
-				i.fail(doc.ID, fmt.Sprintf("更新子 chunk vector_id 失败: %v", err))
-				return err
+				return i.fail(doc.ID, taskID, "更新子chunk vector_id失败", err)
 			}
 			if i.keyword != nil {
 				if err := i.keyword.IndexChild(ctx, childChunk); err != nil {
-					i.fail(doc.ID, fmt.Sprintf("写入关键词索引失败: %v", err))
-					return err
+					return i.fail(doc.ID, taskID, "写入关键词索引失败", err)
 				}
 			}
 			childCount++
 		}
 	}
 
-	return i.updateStatus(doc.ID, model.DocumentStatusCompleted, "", childCount)
+	completed, err := i.docs.CompleteDocumentIndex(doc.ID, taskID, childCount)
+	if err != nil {
+		return err
+	}
+	if !completed {
+		return repository.ErrDocumentIndexLeaseLost
+	}
+	return nil
 }
 
 func embeddingText(chunk Chunk) string {
@@ -175,33 +162,14 @@ func embeddingText(chunk Chunk) string {
 	return "章节：" + chunk.SectionPath + "\n内容：" + chunk.Content
 }
 
-func (i *Indexer) updateStatus(documentID uint64, status, message string, chunkCount int) error {
-	updates := map[string]interface{}{
-		"status":        status,
-		"error_message": message,
+func (i *Indexer) fail(documentID uint64, taskID, message string, cause error) error {
+	wrapped := fmt.Errorf("%s: %w", message, cause)
+	failed, err := i.docs.FailDocumentIndex(documentID, taskID, wrapped.Error())
+	if err != nil {
+		return fmt.Errorf("%v，更新失败状态失败: %w", wrapped, err)
 	}
-	if chunkCount > 0 {
-		updates["chunk_count"] = chunkCount
-	} else if status == model.DocumentStatusProcessing || status == model.DocumentStatusFailed {
-		updates["chunk_count"] = 0
+	if !failed {
+		return repository.ErrDocumentIndexLeaseLost
 	}
-	return i.db.Model(&model.Document{}).Where("id = ?", documentID).Updates(updates).Error
-}
-
-func (i *Indexer) markProcessing(documentID uint64) (bool, error) {
-	result := i.db.Model(&model.Document{}).
-		Where("id = ? AND status = ?", documentID, model.DocumentStatusPending).
-		Updates(map[string]interface{}{
-			"status":        model.DocumentStatusProcessing,
-			"error_message": "",
-			"chunk_count":   0,
-		})
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected > 0, nil
-}
-
-func (i *Indexer) fail(documentID uint64, message string) {
-	_ = i.updateStatus(documentID, model.DocumentStatusFailed, message, 0)
+	return wrapped
 }

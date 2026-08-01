@@ -115,21 +115,24 @@ type SourceSyncStats struct {
 }
 
 type Document struct {
-	ID              uint64    `gorm:"primaryKey" json:"id"`
-	KnowledgeBaseID uint64    `gorm:"index;not null" json:"knowledge_base_id"`
-	UserID          uint64    `gorm:"index;not null" json:"user_id"`
-	Filename        string    `gorm:"size:255;not null" json:"filename"`
-	FileType        string    `gorm:"size:32;not null" json:"file_type"`
-	FilePath        string    `gorm:"size:1024" json:"file_path"`
-	BucketName      string    `gorm:"size:128" json:"bucket_name"`
-	ObjectKey       string    `gorm:"size:1024" json:"object_key"`
-	FileSize        int64     `json:"file_size"`
-	ContentType     string    `gorm:"size:128" json:"content_type"`
-	Status          string    `gorm:"size:32;index;not null" json:"status"`
-	ErrorMessage    string    `gorm:"type:text" json:"error_message"`
-	ChunkCount      int       `json:"chunk_count"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              uint64     `gorm:"primaryKey" json:"id"`
+	KnowledgeBaseID uint64     `gorm:"index;not null" json:"knowledge_base_id"`
+	UserID          uint64     `gorm:"index;not null" json:"user_id"`
+	Filename        string     `gorm:"size:255;not null" json:"filename"`
+	FileType        string     `gorm:"size:32;not null" json:"file_type"`
+	FilePath        string     `gorm:"size:1024" json:"file_path"`
+	BucketName      string     `gorm:"size:128" json:"bucket_name"`
+	ObjectKey       string     `gorm:"size:1024" json:"object_key"`
+	FileSize        int64      `json:"file_size"`
+	ContentType     string     `gorm:"size:128" json:"content_type"`
+	Status          string     `gorm:"size:32;index;not null" json:"status"`
+	ErrorMessage    string     `gorm:"type:text" json:"error_message"`
+	ChunkCount      int        `json:"chunk_count"`
+	IndexTaskID     string     `gorm:"size:64;index" json:"index_task_id"`
+	IndexAttempt    int        `json:"index_attempt"`
+	IndexLeaseUntil *time.Time `gorm:"index" json:"index_lease_until"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type DocumentParentChunk struct {

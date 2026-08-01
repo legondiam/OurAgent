@@ -71,6 +71,7 @@ rabbitmq:
   source_sync_queue: "ouragent.source.sync"
   retry_delay_seconds: 30
   max_retries: 5
+  index_lease_seconds: 1800
   index_workers: 2
   delete_workers: 2
   source_sync_workers: 1
