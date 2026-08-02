@@ -6,12 +6,27 @@ import (
 
 	"OurAgent/internal/model"
 	"OurAgent/internal/queue"
+	"OurAgent/internal/repository"
 
 	"github.com/google/uuid"
 )
 
 type Publisher interface {
 	PublishJSON(ctx context.Context, routingKey string, value any) error
+}
+
+func (p *Producer) PublishConversationCompact(ctx context.Context, task repository.ConversationCompactionTask) error {
+	return p.publisher.PublishJSON(ctx, queue.ConversationCompactRoutingKey, ConversationCompactMessage{
+		EventID:            task.TaskID,
+		Type:               TypeConversationCompact,
+		ConversationID:     task.ConversationID,
+		UserID:             task.UserID,
+		KnowledgeBaseID:    task.KnowledgeBaseID,
+		SnapshotLastLogID:  task.SnapshotLastLogID,
+		BaseSummaryVersion: task.BaseSummaryVersion,
+		Attempt:            task.Attempt,
+		CreatedAt:          time.Now(),
+	})
 }
 
 type Producer struct {

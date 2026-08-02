@@ -69,12 +69,14 @@ rabbitmq:
   index_queue: "ouragent.document.index"
   delete_queue: "ouragent.document.delete.cleanup"
   source_sync_queue: "ouragent.source.sync"
+  conversation_compact_queue: "ouragent.conversation.compact"
   retry_delay_seconds: 30
   max_retries: 5
   index_lease_seconds: 1800
   index_workers: 2
   delete_workers: 2
   source_sync_workers: 1
+  conversation_compact_workers: 1
   prefetch_count: 1
 
 source_sync:
@@ -82,6 +84,17 @@ source_sync:
   lease_seconds: 1800
   schedule_batch_size: 100
   delete_after_missing_syncs: 2
+
+agent_memory:
+  short_term_enabled: true
+  summary_trigger_tokens: 4000
+  context_hard_limit_tokens: 6000
+  keep_recent_tokens: 2000
+  summary_target_tokens: 1000
+  summary_timeout_seconds: 120
+  compaction_lease_seconds: 180
+  conversation_processing_lease_seconds: 180
+  conversation_ttl_hours: 168
 
 web_search:
   enabled: true

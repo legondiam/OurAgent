@@ -10,19 +10,20 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig     `yaml:"server" mapstructure:"server"`
-	MySQL  MySQLConfig      `yaml:"mysql" mapstructure:"mysql"`
-	Qdrant QdrantConfig     `yaml:"qdrant" mapstructure:"qdrant"`
-	MinIO  MinIOConfig      `yaml:"minio" mapstructure:"minio"`
-	LLM    LLMConfig        `yaml:"llm" mapstructure:"llm"`
-	RAG    RAGConfig        `yaml:"rag" mapstructure:"rag"`
-	Rerank RerankConfig     `yaml:"rerank" mapstructure:"rerank"`
-	JWT    JWTConfig        `yaml:"jwt" mapstructure:"jwt"`
-	Search SearchConfig     `yaml:"search" mapstructure:"search"`
-	Rabbit RabbitMQConfig   `yaml:"rabbitmq" mapstructure:"rabbitmq"`
-	Source SourceSyncConfig `yaml:"source_sync" mapstructure:"source_sync"`
-	Web    WebSearchConfig  `yaml:"web_search" mapstructure:"web_search"`
-	OAuth  OAuthConfig      `yaml:"oauth" mapstructure:"oauth"`
+	Server ServerConfig      `yaml:"server" mapstructure:"server"`
+	MySQL  MySQLConfig       `yaml:"mysql" mapstructure:"mysql"`
+	Qdrant QdrantConfig      `yaml:"qdrant" mapstructure:"qdrant"`
+	MinIO  MinIOConfig       `yaml:"minio" mapstructure:"minio"`
+	LLM    LLMConfig         `yaml:"llm" mapstructure:"llm"`
+	RAG    RAGConfig         `yaml:"rag" mapstructure:"rag"`
+	Rerank RerankConfig      `yaml:"rerank" mapstructure:"rerank"`
+	JWT    JWTConfig         `yaml:"jwt" mapstructure:"jwt"`
+	Search SearchConfig      `yaml:"search" mapstructure:"search"`
+	Rabbit RabbitMQConfig    `yaml:"rabbitmq" mapstructure:"rabbitmq"`
+	Source SourceSyncConfig  `yaml:"source_sync" mapstructure:"source_sync"`
+	Web    WebSearchConfig   `yaml:"web_search" mapstructure:"web_search"`
+	OAuth  OAuthConfig       `yaml:"oauth" mapstructure:"oauth"`
+	Memory AgentMemoryConfig `yaml:"agent_memory" mapstructure:"agent_memory"`
 }
 
 type ServerConfig struct {
@@ -93,19 +94,33 @@ type SearchConfig struct {
 }
 
 type RabbitMQConfig struct {
-	Enabled           bool   `yaml:"enabled" mapstructure:"enabled"`
-	URL               string `yaml:"url" mapstructure:"url"`
-	Exchange          string `yaml:"exchange" mapstructure:"exchange"`
-	IndexQueue        string `yaml:"index_queue" mapstructure:"index_queue"`
-	DeleteQueue       string `yaml:"delete_queue" mapstructure:"delete_queue"`
-	SourceSyncQueue   string `yaml:"source_sync_queue" mapstructure:"source_sync_queue"`
-	RetryDelaySeconds int    `yaml:"retry_delay_seconds" mapstructure:"retry_delay_seconds"`
-	MaxRetries        int    `yaml:"max_retries" mapstructure:"max_retries"`
-	IndexLeaseSeconds int    `yaml:"index_lease_seconds" mapstructure:"index_lease_seconds"`
-	IndexWorkers      int    `yaml:"index_workers" mapstructure:"index_workers"`
-	DeleteWorkers     int    `yaml:"delete_workers" mapstructure:"delete_workers"`
-	SourceSyncWorkers int    `yaml:"source_sync_workers" mapstructure:"source_sync_workers"`
-	PrefetchCount     int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
+	Enabled                    bool   `yaml:"enabled" mapstructure:"enabled"`
+	URL                        string `yaml:"url" mapstructure:"url"`
+	Exchange                   string `yaml:"exchange" mapstructure:"exchange"`
+	IndexQueue                 string `yaml:"index_queue" mapstructure:"index_queue"`
+	DeleteQueue                string `yaml:"delete_queue" mapstructure:"delete_queue"`
+	SourceSyncQueue            string `yaml:"source_sync_queue" mapstructure:"source_sync_queue"`
+	ConversationCompactQueue   string `yaml:"conversation_compact_queue" mapstructure:"conversation_compact_queue"`
+	RetryDelaySeconds          int    `yaml:"retry_delay_seconds" mapstructure:"retry_delay_seconds"`
+	MaxRetries                 int    `yaml:"max_retries" mapstructure:"max_retries"`
+	IndexLeaseSeconds          int    `yaml:"index_lease_seconds" mapstructure:"index_lease_seconds"`
+	IndexWorkers               int    `yaml:"index_workers" mapstructure:"index_workers"`
+	DeleteWorkers              int    `yaml:"delete_workers" mapstructure:"delete_workers"`
+	SourceSyncWorkers          int    `yaml:"source_sync_workers" mapstructure:"source_sync_workers"`
+	ConversationCompactWorkers int    `yaml:"conversation_compact_workers" mapstructure:"conversation_compact_workers"`
+	PrefetchCount              int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
+}
+
+type AgentMemoryConfig struct {
+	ShortTermEnabled                   bool `yaml:"short_term_enabled" mapstructure:"short_term_enabled"`
+	SummaryTriggerTokens               int  `yaml:"summary_trigger_tokens" mapstructure:"summary_trigger_tokens"`
+	ContextHardLimitTokens             int  `yaml:"context_hard_limit_tokens" mapstructure:"context_hard_limit_tokens"`
+	KeepRecentTokens                   int  `yaml:"keep_recent_tokens" mapstructure:"keep_recent_tokens"`
+	SummaryTargetTokens                int  `yaml:"summary_target_tokens" mapstructure:"summary_target_tokens"`
+	SummaryTimeoutSeconds              int  `yaml:"summary_timeout_seconds" mapstructure:"summary_timeout_seconds"`
+	CompactionLeaseSeconds             int  `yaml:"compaction_lease_seconds" mapstructure:"compaction_lease_seconds"`
+	ConversationProcessingLeaseSeconds int  `yaml:"conversation_processing_lease_seconds" mapstructure:"conversation_processing_lease_seconds"`
+	ConversationTTLHours               int  `yaml:"conversation_ttl_hours" mapstructure:"conversation_ttl_hours"`
 }
 
 type SourceSyncConfig struct {
@@ -198,12 +213,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.index_queue", "ouragent.document.index")
 	v.SetDefault("rabbitmq.delete_queue", "ouragent.document.delete.cleanup")
 	v.SetDefault("rabbitmq.source_sync_queue", "ouragent.source.sync")
+	v.SetDefault("rabbitmq.conversation_compact_queue", "ouragent.conversation.compact")
 	v.SetDefault("rabbitmq.retry_delay_seconds", 30)
 	v.SetDefault("rabbitmq.max_retries", 5)
 	v.SetDefault("rabbitmq.index_lease_seconds", 1800)
 	v.SetDefault("rabbitmq.index_workers", 2)
 	v.SetDefault("rabbitmq.delete_workers", 2)
 	v.SetDefault("rabbitmq.source_sync_workers", 1)
+	v.SetDefault("rabbitmq.conversation_compact_workers", 1)
 	v.SetDefault("rabbitmq.prefetch_count", 1)
 	v.SetDefault("source_sync.scheduler_interval_seconds", 60)
 	v.SetDefault("source_sync.lease_seconds", 1800)
@@ -217,6 +234,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("web_search.timeout_seconds", 60)
 	v.SetDefault("web_search.enable_source", true)
 	v.SetDefault("oauth.notion.redirect_url", "http://localhost:8080/api/v1/oauth/notion/callback")
+	v.SetDefault("agent_memory.short_term_enabled", true)
+	v.SetDefault("agent_memory.summary_trigger_tokens", 4000)
+	v.SetDefault("agent_memory.context_hard_limit_tokens", 6000)
+	v.SetDefault("agent_memory.keep_recent_tokens", 2000)
+	v.SetDefault("agent_memory.summary_target_tokens", 1000)
+	v.SetDefault("agent_memory.summary_timeout_seconds", 120)
+	v.SetDefault("agent_memory.compaction_lease_seconds", 180)
+	v.SetDefault("agent_memory.conversation_processing_lease_seconds", 180)
+	v.SetDefault("agent_memory.conversation_ttl_hours", 168)
 	v.SetDefault("web_search.disclaimer", "当前知识库没有找到足够信息，以下内容基于联网搜索结果生成，仅供参考。网络资料可能不准确、过期或与实际情况不一致。")
 }
 
@@ -254,12 +280,14 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("rabbitmq.index_queue", "RABBITMQ_INDEX_QUEUE")
 	_ = v.BindEnv("rabbitmq.delete_queue", "RABBITMQ_DELETE_QUEUE")
 	_ = v.BindEnv("rabbitmq.source_sync_queue", "RABBITMQ_SOURCE_SYNC_QUEUE")
+	_ = v.BindEnv("rabbitmq.conversation_compact_queue", "RABBITMQ_CONVERSATION_COMPACT_QUEUE")
 	_ = v.BindEnv("rabbitmq.retry_delay_seconds", "RABBITMQ_RETRY_DELAY_SECONDS")
 	_ = v.BindEnv("rabbitmq.max_retries", "RABBITMQ_MAX_RETRIES")
 	_ = v.BindEnv("rabbitmq.index_lease_seconds", "RABBITMQ_INDEX_LEASE_SECONDS")
 	_ = v.BindEnv("rabbitmq.index_workers", "RABBITMQ_INDEX_WORKERS")
 	_ = v.BindEnv("rabbitmq.delete_workers", "RABBITMQ_DELETE_WORKERS")
 	_ = v.BindEnv("rabbitmq.source_sync_workers", "RABBITMQ_SOURCE_SYNC_WORKERS")
+	_ = v.BindEnv("rabbitmq.conversation_compact_workers", "RABBITMQ_CONVERSATION_COMPACT_WORKERS")
 	_ = v.BindEnv("rabbitmq.prefetch_count", "RABBITMQ_PREFETCH_COUNT")
 	_ = v.BindEnv("source_sync.scheduler_interval_seconds", "SOURCE_SYNC_SCHEDULER_INTERVAL_SECONDS")
 	_ = v.BindEnv("source_sync.lease_seconds", "SOURCE_SYNC_LEASE_SECONDS")
@@ -277,6 +305,15 @@ func bindEnv(v *viper.Viper) {
 	_ = v.BindEnv("oauth.notion.client_id", "NOTION_CLIENT_ID")
 	_ = v.BindEnv("oauth.notion.client_secret", "NOTION_CLIENT_SECRET")
 	_ = v.BindEnv("oauth.notion.redirect_url", "NOTION_REDIRECT_URL")
+	_ = v.BindEnv("agent_memory.short_term_enabled", "AGENT_MEMORY_SHORT_TERM_ENABLED")
+	_ = v.BindEnv("agent_memory.summary_trigger_tokens", "AGENT_MEMORY_SUMMARY_TRIGGER_TOKENS")
+	_ = v.BindEnv("agent_memory.context_hard_limit_tokens", "AGENT_MEMORY_CONTEXT_HARD_LIMIT_TOKENS")
+	_ = v.BindEnv("agent_memory.keep_recent_tokens", "AGENT_MEMORY_KEEP_RECENT_TOKENS")
+	_ = v.BindEnv("agent_memory.summary_target_tokens", "AGENT_MEMORY_SUMMARY_TARGET_TOKENS")
+	_ = v.BindEnv("agent_memory.summary_timeout_seconds", "AGENT_MEMORY_SUMMARY_TIMEOUT_SECONDS")
+	_ = v.BindEnv("agent_memory.compaction_lease_seconds", "AGENT_MEMORY_COMPACTION_LEASE_SECONDS")
+	_ = v.BindEnv("agent_memory.conversation_processing_lease_seconds", "AGENT_MEMORY_PROCESSING_LEASE_SECONDS")
+	_ = v.BindEnv("agent_memory.conversation_ttl_hours", "AGENT_MEMORY_CONVERSATION_TTL_HOURS")
 }
 
 func applyDefaults(cfg *Config) {
@@ -355,6 +392,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Rabbit.SourceSyncQueue == "" {
 		cfg.Rabbit.SourceSyncQueue = "ouragent.source.sync"
 	}
+	if cfg.Rabbit.ConversationCompactQueue == "" {
+		cfg.Rabbit.ConversationCompactQueue = "ouragent.conversation.compact"
+	}
 	if cfg.Rabbit.RetryDelaySeconds <= 0 {
 		cfg.Rabbit.RetryDelaySeconds = 30
 	}
@@ -372,6 +412,33 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Rabbit.SourceSyncWorkers <= 0 {
 		cfg.Rabbit.SourceSyncWorkers = 1
+	}
+	if cfg.Rabbit.ConversationCompactWorkers <= 0 {
+		cfg.Rabbit.ConversationCompactWorkers = 1
+	}
+	if cfg.Memory.SummaryTriggerTokens <= 0 {
+		cfg.Memory.SummaryTriggerTokens = 4000
+	}
+	if cfg.Memory.ContextHardLimitTokens <= 0 {
+		cfg.Memory.ContextHardLimitTokens = 6000
+	}
+	if cfg.Memory.KeepRecentTokens <= 0 {
+		cfg.Memory.KeepRecentTokens = 2000
+	}
+	if cfg.Memory.SummaryTargetTokens <= 0 {
+		cfg.Memory.SummaryTargetTokens = 1000
+	}
+	if cfg.Memory.SummaryTimeoutSeconds <= 0 {
+		cfg.Memory.SummaryTimeoutSeconds = 120
+	}
+	if cfg.Memory.CompactionLeaseSeconds <= 0 {
+		cfg.Memory.CompactionLeaseSeconds = 180
+	}
+	if cfg.Memory.ConversationProcessingLeaseSeconds <= 0 {
+		cfg.Memory.ConversationProcessingLeaseSeconds = 180
+	}
+	if cfg.Memory.ConversationTTLHours <= 0 {
+		cfg.Memory.ConversationTTLHours = 168
 	}
 	if cfg.Rabbit.PrefetchCount <= 0 {
 		cfg.Rabbit.PrefetchCount = 1
@@ -436,6 +503,7 @@ func expandEnv(cfg *Config) {
 	cfg.Rabbit.IndexQueue = os.ExpandEnv(cfg.Rabbit.IndexQueue)
 	cfg.Rabbit.DeleteQueue = os.ExpandEnv(cfg.Rabbit.DeleteQueue)
 	cfg.Rabbit.SourceSyncQueue = os.ExpandEnv(cfg.Rabbit.SourceSyncQueue)
+	cfg.Rabbit.ConversationCompactQueue = os.ExpandEnv(cfg.Rabbit.ConversationCompactQueue)
 	cfg.Web.Endpoint = os.ExpandEnv(cfg.Web.Endpoint)
 	cfg.Web.APIKey = os.ExpandEnv(cfg.Web.APIKey)
 	cfg.Web.Model = os.ExpandEnv(cfg.Web.Model)

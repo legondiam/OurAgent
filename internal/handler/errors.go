@@ -72,6 +72,12 @@ func handleChatError(c *gin.Context, err error, fallback string) {
 	case stderrors.Is(err, service.ErrConversationNotFound):
 		response.BusinessError(c, response.CodeChatLogNotFound, "会话不存在或无权限访问")
 		logger.S.Infof("会话不存在或无权限访问：%+v", err)
+	case stderrors.Is(err, service.ErrConversationBusy):
+		response.Conflict(c, response.CodeConversationBusy, "当前会话正在处理上一条消息，请稍后重试")
+		logger.S.Infof("会话正在处理中：%+v", err)
+	case stderrors.Is(err, service.ErrConversationExpired):
+		response.Gone(c, response.CodeConversationExpired, "会话已过期，请开始新会话")
+		logger.S.Infof("会话已过期：%+v", err)
 	case stderrors.Is(err, service.ErrInvalidFeedback):
 		response.BusinessError(c, response.CodeInvalidFeedback, "反馈参数错误")
 		logger.S.Infof("反馈参数错误：%+v", err)

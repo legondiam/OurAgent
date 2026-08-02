@@ -5,20 +5,22 @@ import "strings"
 type Action string
 
 const (
-	ActionContextLookup   Action = "context_lookup"
-	ActionKnowledgeProbe  Action = "knowledge_probe"
-	ActionDirectAnswer    Action = "direct_answer"
-	ActionClarify         Action = "clarify"
-	ActionKnowledgeSearch Action = "knowledge_search"
-	ActionWebSearch       Action = "web_search"
-	ActionReject          Action = "reject"
+	ActionContextLookup      Action = "context_lookup"
+	ActionKnowledgeProbe     Action = "knowledge_probe"
+	ActionDirectAnswer       Action = "direct_answer"
+	ActionConversationAnswer Action = "conversation_answer"
+	ActionClarify            Action = "clarify"
+	ActionKnowledgeSearch    Action = "knowledge_search"
+	ActionWebSearch          Action = "web_search"
+	ActionReject             Action = "reject"
 )
 
 type Decision struct {
-	Action          Action     `json:"action"`
-	Reason          string     `json:"reason"`
-	SearchPlan      SearchPlan `json:"search_plan,omitempty"`
-	ClarifyQuestion string     `json:"clarify_question,omitempty"`
+	Action           Action     `json:"action"`
+	Reason           string     `json:"reason"`
+	SearchPlan       SearchPlan `json:"search_plan,omitempty"`
+	ClarifyQuestion  string     `json:"clarify_question,omitempty"`
+	SourceChatLogIDs []uint64   `json:"source_chat_log_ids,omitempty"`
 }
 
 type SearchPlan struct {
@@ -90,6 +92,13 @@ func NormalizeDecision(decision Decision, input PlannerInput, defaults SearchPla
 	switch decision.Action {
 	case ActionContextLookup, ActionDirectAnswer:
 		decision.SearchPlan = SearchPlan{}
+	case ActionConversationAnswer:
+		decision.SearchPlan = SearchPlan{}
+		if !hasTool(input.Tools, ActionConversationAnswer) || !hasValidSourceChatLogID(decision.SourceChatLogIDs) {
+			decision.Action = ActionClarify
+			decision.Reason = "缺少可用的会话回答来源，改为澄清追问"
+			decision.ClarifyQuestion = "请说明你想复述、转换或比较会话中的哪一条回答。"
+		}
 	case ActionKnowledgeProbe:
 		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
 	case ActionClarify:
@@ -122,6 +131,13 @@ func normalizeContextResolvedDecision(decision Decision, input PlannerInput, def
 		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
 	case ActionKnowledgeSearch:
 		decision.SearchPlan = NormalizeSearchPlan(decision.SearchPlan, input.UserQuestion, defaults)
+	case ActionConversationAnswer:
+		decision.SearchPlan = SearchPlan{}
+		if !hasTool(input.Tools, ActionConversationAnswer) || !hasValidSourceChatLogID(decision.SourceChatLogIDs) {
+			decision.Action = ActionClarify
+			decision.Reason = "缺少可用的会话回答来源，改为澄清追问"
+			decision.ClarifyQuestion = "请说明你想复述、转换或比较会话中的哪一条回答。"
+		}
 	case ActionDirectAnswer, ActionWebSearch, ActionReject:
 		decision.SearchPlan = SearchPlan{}
 	default:
@@ -256,6 +272,8 @@ func normalizeAction(action Action) Action {
 		return ActionKnowledgeProbe
 	case ActionDirectAnswer:
 		return ActionDirectAnswer
+	case ActionConversationAnswer:
+		return ActionConversationAnswer
 	case ActionClarify:
 		return ActionClarify
 	case ActionKnowledgeSearch:

@@ -2,25 +2,41 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	stderrors "errors"
+	"strconv"
 	"strings"
 	"time"
 
 	"OurAgent/internal/agent"
+	"OurAgent/internal/config"
 	"OurAgent/internal/model"
 	"OurAgent/internal/rag"
+	"OurAgent/internal/repository"
 	"OurAgent/internal/websearch"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	pkgerrors "github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 type AgentService struct {
-	chat        *ChatService
-	planner     agent.Planner
-	directChat  einomodel.BaseChatModel
-	postPlanner *agent.PostRAGPlanner
+	chat             *ChatService
+	planner          agent.Planner
+	directChat       einomodel.BaseChatModel
+	postPlanner      *agent.PostRAGPlanner
+	conversations    *repository.ConversationRepository
+	contextAssembler *ConversationContextAssembler
+	memoryCfg        config.AgentMemoryConfig
+}
+
+// ConfigureShortTermMemory启用新的短期记忆链路
+func (s *AgentService) ConfigureShortTermMemory(conversations *repository.ConversationRepository, assembler *ConversationContextAssembler, cfg config.AgentMemoryConfig) {
+	s.conversations = conversations
+	s.contextAssembler = assembler
+	s.memoryCfg = cfg
 }
 
 type AgentChatRequest struct {
@@ -59,6 +75,15 @@ const directAnswerSystemPrompt = `你是企业知识库助手。
 2. 如果问题实际涉及企业内部事实，请说明需要查询知识库
 3. 回答简洁清晰`
 
+const conversationAnswerSystemPrompt = `你是企业知识库助手。
+你的任务是严格按照用户当前要求，对提供的既有会话回答进行复述、缩写、翻译、整理或比较。
+
+要求：
+1. 只能使用提供的既有回答，不要补充新的企业事实
+2. 保留原回答中的条件、限制和不确定性
+3. 不要声称重新查询了知识库
+4. 直接输出处理后的结果`
+
 // NewAgentService创建Agent服务
 func NewAgentService(chat *ChatService, planner agent.Planner, directChats ...einomodel.BaseChatModel) *AgentService {
 	var directChat einomodel.BaseChatModel
@@ -81,18 +106,36 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 	start := time.Now()
 	trace := agent.NewTrace(agent.IntentKnowledgeQA)
 
-	conversationID, latest, err := s.resolveConversation(ctx, req)
+	conversationID := ""
+	var latest *model.ChatLog
+	var conversationContext *agent.ConversationContext
+	processingToken := ""
+	isNewConversation := false
+	var err error
+	if s.memoryCfg.ShortTermEnabled && s.conversations != nil && s.contextAssembler != nil {
+		conversationID, isNewConversation, processingToken, conversationContext, err = s.prepareShortTermConversation(req)
+	} else {
+		conversationID, latest, err = s.resolveConversation(ctx, req)
+	}
 	if err != nil {
 		return nil, err
 	}
+	if processingToken != "" {
+		defer s.conversations.ReleaseProcessingLease(conversationID, processingToken)
+	}
 	req.ConversationID = conversationID
 	trace.ConversationID = conversationID
+	if conversationContext != nil {
+		trace.MarkContextAssembled(*conversationContext)
+	}
 
 	chatReq := ChatRequest{
-		UserID:          req.UserID,
-		KnowledgeBaseID: req.KnowledgeBaseID,
-		ConversationID:  conversationID,
-		Question:        req.Question,
+		UserID:                      req.UserID,
+		KnowledgeBaseID:             req.KnowledgeBaseID,
+		ConversationID:              conversationID,
+		Question:                    req.Question,
+		ConversationProcessingToken: processingToken,
+		NewConversation:             isNewConversation,
 	}
 
 	// 先校验知识库归属，避免直接联网路径绕过权限
@@ -102,7 +145,10 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 	}
 
 	var decision agent.Decision
-	if latest != nil && latest.AnswerMode == agent.FinalModeClarify {
+	if conversationContext != nil {
+		decision = s.planWithAssembledContext(ctx, req.Question, *conversationContext, &trace)
+		trace.MarkContextResolvedDecision(decision)
+	} else if latest != nil && latest.AnswerMode == agent.FinalModeClarify {
 		decision = s.planWithConversationContext(ctx, req, &trace)
 		trace.MarkContextResolvedDecision(decision)
 	} else {
@@ -130,6 +176,8 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		return s.answerReject(resolved, decision, trace, start)
 	case agent.ActionDirectAnswer:
 		return s.runDirectAnswer(ctx, resolved, decision, &trace, start)
+	case agent.ActionConversationAnswer:
+		return s.runConversationAnswer(ctx, resolved, decision, &trace, start)
 	case agent.ActionWebSearch:
 		if !s.canUseWebSearch() {
 			trace.MarkRejected("联网搜索未启用或未被允许")
@@ -157,6 +205,64 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		trace.MarkPlannerDecision(fallback)
 		return s.runKnowledgeSearchWithPlan(ctx, chatReq, fallback.SearchPlan, &trace, start)
 	}
+}
+
+func (s *AgentService) prepareShortTermConversation(req AgentChatRequest) (string, bool, string, *agent.ConversationContext, error) {
+	conversationID := strings.TrimSpace(req.ConversationID)
+	if conversationID == "" {
+		return newConversationID(), true, "", nil, nil
+	}
+	if len(conversationID) > 64 {
+		return "", false, "", nil, ErrConversationNotFound
+	}
+	conversation, err := s.conversations.FindOwned(req.UserID, req.KnowledgeBaseID, conversationID)
+	if err != nil {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			return "", false, "", nil, ErrConversationNotFound
+		}
+		return "", false, "", nil, err
+	}
+	now := time.Now()
+	if conversation.Status != model.ConversationStatusActive || !conversation.ExpiresAt.After(now) {
+		return "", false, "", nil, ErrConversationExpired
+	}
+	token := uuid.NewString()
+	leaseSeconds := s.memoryCfg.ConversationProcessingLeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 180
+	}
+	claimed, err := s.conversations.TryAcquireProcessingLease(req.UserID, req.KnowledgeBaseID, conversationID, token, now, now.Add(time.Duration(leaseSeconds)*time.Second))
+	if err != nil {
+		return "", false, "", nil, err
+	}
+	if !claimed {
+		return "", false, "", nil, ErrConversationBusy
+	}
+	context, err := s.contextAssembler.Build(ContextAssembleRequest{
+		UserID: req.UserID, KnowledgeBaseID: req.KnowledgeBaseID, ConversationID: conversationID,
+	})
+	if err != nil {
+		_ = s.conversations.ReleaseProcessingLease(conversationID, token)
+		return "", false, "", nil, err
+	}
+	return conversationID, false, token, &context, nil
+}
+
+func (s *AgentService) planWithAssembledContext(ctx context.Context, question string, conversationContext agent.ConversationContext, trace *agent.Trace) agent.Decision {
+	defaults := s.defaultSearchPlan(question)
+	input := agent.PlannerInput{
+		Stage:        agent.PlannerStageContextResolved,
+		UserQuestion: question,
+		Tools:        s.availableContextResolvedTools(),
+		WebEnabled:   s.canUseWebSearch(),
+		Context:      &conversationContext,
+	}
+	decision, err := s.planner.Plan(ctx, input)
+	if err != nil {
+		trace.MarkPlannerError(err)
+		return agent.DefaultKnowledgeSearchDecision(question, defaults)
+	}
+	return agent.NormalizeDecision(decision, input, defaults)
 }
 
 // resolveConversation 托管Agent会话ID生命周期
@@ -539,6 +645,63 @@ func (s *AgentService) runDirectAnswer(ctx context.Context, resolved rag.Request
 	return s.saveAgentResponse(prepared, *trace, start)
 }
 
+// runConversationAnswer基于既有会话回答执行内容转换
+func (s *AgentService) runConversationAnswer(ctx context.Context, resolved rag.Request, decision agent.Decision, trace *agent.Trace, start time.Time) (*AgentChatResponse, error) {
+	if s.directChat == nil {
+		return s.answerClarify(resolved, agent.Decision{Action: agent.ActionClarify, Reason: "会话回答模型未配置", ClarifyQuestion: "请稍后重试。"}, *trace, start)
+	}
+	ids := uniqueUint64(decision.SourceChatLogIDs, 5)
+	logs, err := s.chat.logs.FindManyOwnedByConversation(resolved.UserID, resolved.KnowledgeBaseID, resolved.ConversationID, ids)
+	if err != nil || len(logs) != len(ids) {
+		return s.answerClarify(resolved, agent.Decision{Action: agent.ActionClarify, Reason: "会话回答来源不可用", ClarifyQuestion: "请说明你想复述、转换或比较哪一条回答。"}, *trace, start)
+	}
+	var prompt strings.Builder
+	prompt.WriteString("用户当前要求：\n")
+	prompt.WriteString(resolved.Question)
+	prompt.WriteString("\n\n既有会话回答：\n")
+	sources := make([]rag.Source, 0)
+	for _, log := range logs {
+		prompt.WriteString("\n[chat_log_id=")
+		prompt.WriteString(uintString(log.ID))
+		prompt.WriteString("]\n用户问题：")
+		prompt.WriteString(log.Question)
+		prompt.WriteString("\n助手回答：")
+		prompt.WriteString(log.Answer)
+		var logSources []rag.Source
+		if len(log.RetrievedChunks) > 0 && json.Unmarshal(log.RetrievedChunks, &logSources) == nil {
+			sources = append(sources, logSources...)
+		}
+	}
+	resp, err := s.directChat.Generate(ctx, []*schema.Message{
+		schema.SystemMessage(conversationAnswerSystemPrompt),
+		schema.UserMessage(prompt.String()),
+	})
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		if err != nil {
+			trace.MarkPlannerError(err)
+		}
+		return s.answerClarify(resolved, agent.Decision{Action: agent.ActionClarify, Reason: "会话回答转换失败", ClarifyQuestion: "请稍后重试，或重新描述希望如何处理上一条回答。"}, *trace, start)
+	}
+	trace.AddStep(agent.Step{
+		Tool:   agent.ToolConversationAnswer,
+		Action: "transform",
+		Status: agent.StatusSuccess,
+		Reason: decision.Reason,
+		Metadata: map[string]any{
+			"source_chat_log_ids": ids,
+			"reused_sources":      len(sources) > 0,
+		},
+	})
+	trace.FinalMode = agent.FinalModeConversationAnswer
+	prepared := &rag.PreparedChat{
+		Request: resolved,
+		Answer:  strings.TrimSpace(resp.Content),
+		Sources: dedupeRAGSources(sources),
+		Trace:   rag.NewTrace(resolved, decision.Reason),
+	}
+	return s.saveAgentResponse(prepared, *trace, start)
+}
+
 // answerClarify返回Planner澄清问题
 func (s *AgentService) answerClarify(resolved rag.Request, decision agent.Decision, trace agent.Trace, start time.Time) (*AgentChatResponse, error) {
 	trace.MarkClarify(decision.ClarifyQuestion)
@@ -620,6 +783,14 @@ func (s *AgentService) availableFinalTools() []agent.ToolSpec {
 		tools = append(tools, agent.ToolSpec{Name: string(agent.ActionWebSearch), Description: "查询实时或公开网络信息"})
 	}
 	return tools
+}
+
+func (s *AgentService) availableContextResolvedTools() []agent.ToolSpec {
+	tools := s.availableFinalTools()
+	return append([]agent.ToolSpec{{
+		Name:        string(agent.ActionConversationAnswer),
+		Description: "仅对会话中已有回答进行复述、缩写、翻译、格式转换或比较，必须提供来源chat_log_id",
+	}}, tools...)
 }
 
 // availableProbeResolvedTools 返回知识库探测后的最终动作列表
@@ -744,6 +915,43 @@ func knowledgeSearchOptionsFromPlan(plan agent.SearchPlan) KnowledgeSearchOption
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func uniqueUint64(values []uint64, limit int) []uint64 {
+	seen := make(map[uint64]struct{}, len(values))
+	result := make([]uint64, 0, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result
+}
+
+func dedupeRAGSources(sources []rag.Source) []rag.Source {
+	seen := make(map[string]struct{}, len(sources))
+	result := make([]rag.Source, 0, len(sources))
+	for _, source := range sources {
+		key := source.SourceType + "|" + uintString(source.DocumentID) + "|" + uintString(source.ChunkID) + "|" + source.URL
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, source)
+	}
+	return result
+}
+
+func uintString(value uint64) string {
+	return strconv.FormatUint(value, 10)
 }
 
 func buildDirectAnswerPrompt(question string) string {

@@ -13,16 +13,19 @@ import (
 )
 
 const (
-	DocumentIndexRoutingKey       = "document.index"
-	DocumentIndexRetryRoutingKey  = "document.index.retry"
-	DocumentIndexDLQRoutingKey    = "document.index.dlq"
-	DocumentDeleteRoutingKey      = "document.delete.cleanup"
-	DocumentDeleteRetryRoutingKey = "document.delete.cleanup.retry"
-	DocumentDeleteDLQRoutingKey   = "document.delete.cleanup.dlq"
-	SourceSyncRoutingKey          = "source.sync"
-	SourceSyncRetryRoutingKey     = "source.sync.retry"
-	SourceSyncDLQRoutingKey       = "source.sync.dlq"
-	contentTypeJSON               = "application/json"
+	DocumentIndexRoutingKey            = "document.index"
+	DocumentIndexRetryRoutingKey       = "document.index.retry"
+	DocumentIndexDLQRoutingKey         = "document.index.dlq"
+	DocumentDeleteRoutingKey           = "document.delete.cleanup"
+	DocumentDeleteRetryRoutingKey      = "document.delete.cleanup.retry"
+	DocumentDeleteDLQRoutingKey        = "document.delete.cleanup.dlq"
+	SourceSyncRoutingKey               = "source.sync"
+	SourceSyncRetryRoutingKey          = "source.sync.retry"
+	SourceSyncDLQRoutingKey            = "source.sync.dlq"
+	ConversationCompactRoutingKey      = "conversation.compact"
+	ConversationCompactRetryRoutingKey = "conversation.compact.retry"
+	ConversationCompactDLQRoutingKey   = "conversation.compact.dlq"
+	contentTypeJSON                    = "application/json"
 )
 
 type Client struct {
@@ -152,6 +155,9 @@ func (c *Client) declareTopology(cfg config.RabbitMQConfig) error {
 		return err
 	}
 	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.SourceSyncQueue, SourceSyncRoutingKey, SourceSyncRetryRoutingKey, SourceSyncDLQRoutingKey, cfg.RetryDelaySeconds); err != nil {
+		return err
+	}
+	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.ConversationCompactQueue, ConversationCompactRoutingKey, ConversationCompactRetryRoutingKey, ConversationCompactDLQRoutingKey, cfg.RetryDelaySeconds); err != nil {
 		return err
 	}
 	return nil

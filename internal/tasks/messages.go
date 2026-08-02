@@ -6,6 +6,7 @@ const (
 	TypeDocumentIndex         = "document.index"
 	TypeDocumentDeleteCleanup = "document.delete.cleanup"
 	TypeSourceSync            = "source.sync"
+	TypeConversationCompact   = "conversation.compact"
 	DeleteModeDeindex         = "deindex"
 	DeleteModeDelete          = "delete"
 )
@@ -17,6 +18,18 @@ type DocumentIndexMessage struct {
 	UserID             uint64    `json:"user_id"`
 	KnowledgeBaseID    uint64    `json:"knowledge_base_id"`
 	ExternalDocumentID uint64    `json:"external_document_id,omitempty"`
+	Attempt            int       `json:"attempt"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+type ConversationCompactMessage struct {
+	EventID            string    `json:"event_id"`
+	Type               string    `json:"type"`
+	ConversationID     string    `json:"conversation_id"`
+	UserID             uint64    `json:"user_id"`
+	KnowledgeBaseID    uint64    `json:"knowledge_base_id"`
+	SnapshotLastLogID  uint64    `json:"snapshot_last_log_id"`
+	BaseSummaryVersion uint64    `json:"base_summary_version"`
 	Attempt            int       `json:"attempt"`
 	CreatedAt          time.Time `json:"created_at"`
 }

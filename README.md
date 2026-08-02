@@ -224,11 +224,11 @@ question
 
 ```text
 question
-  -> Pre-RAG LLM Planner
-  -> direct_answer / context_lookup / knowledge_probe / clarify / knowledge_search / web_search / reject
+  -> optional ConversationContextAssembler
+  -> Pre-RAG / Context-Resolved LLM Planner
+  -> conversation_answer / direct_answer / knowledge_probe / clarify / knowledge_search / web_search / reject
+  -> optional ConversationAnswerTool
   -> optional DirectAnswerTool
-  -> optional ConversationContextTool
-  -> optional Context-Resolved LLM Planner
   -> optional KnowledgeProbeTool
   -> optional Probe-Resolved LLM Planner
   -> KnowledgeSearchTool / WebSearchTool
@@ -236,11 +236,13 @@ question
   -> answer, sources, retrieval trace, agent trace
 ```
 
-Agent Router基于Eino ChatModel实现LLM Planner，并使用原生function calling输出动作决策：function name对应Agent动作，arguments沿用`reason`、`search_plan`和`clarify_question`等现有Decision字段，真实工具执行仍由服务端统一调度。Planner会在检索前判断用户问题是否可以直接回答、是否需要读取会话上下文、轻量探测知识库、澄清、查询知识库、直接联网或拒答。`direct_answer`仅用于寒暄、通用知识解释、写作辅助和格式转换等不依赖企业知识库和实时信息的问题，不返回知识库来源；如果选择`context_lookup`，服务端会读取同一用户、同一知识库、同一`conversation_id`下最近几轮问答，再让Planner基于历史进行二次决策。二次决策阶段不允许再次选择`context_lookup`，避免循环。
+Agent Router基于Eino ChatModel实现LLM Planner，并使用原生function calling输出动作决策：function name对应Agent动作，真实工具执行仍由服务端统一调度。启用短期记忆后，已有会话会在Planner执行前自动装配结构化摘要和摘要后的原始问答，不再把上下文读取暴露为模型可选Tool。短会话使用完整原始历史，历史超过Token阈值后通过RabbitMQ异步压缩旧内容，并始终保留最近原始问答；摘要未完成或异常时按硬Token预算优先保留最新历史。
+
+`direct_answer`仅用于寒暄、通用知识解释和写作辅助等不依赖企业知识库、会话回答和实时信息的问题。`conversation_answer`用于缩写、复述、翻译、格式转换或比较会话中的既有回答，必须携带来源`chat_log_id`，并继承原回答来源；版本变化、有效性、适用范围、例外等新的企业事实判断仍然重新查询知识库。
 
 `knowledge_probe`用于问题看似通用、但可能包含企业产品、项目、型号、套餐、价格、规格等业务对象的场景。它复用现有召回器，只取少量候选的标题、路径、分数和预览，不生成最终答案；随后Probe-Resolved Planner会根据探测结果决定进入完整知识库检索、直接回答、澄清、联网搜索或拒答。
 
-如果选择知识库检索，Planner会生成有限的`SearchPlan`，控制检索query、topK、query rewrite、hybrid和rerank开关。代码侧会校验Planner输出，只执行白名单动作；知识库检索低置信度时会进入Post-RAG Planner，由Agent结合检索摘要决定澄清、联网补充或拒答。`AgentTrace`会记录Planner决策、直接回答、上下文工具调用、知识库轻量探测、知识库检索、联网搜索和最终回答模式。
+如果选择知识库检索，Planner会生成有限的`SearchPlan`，控制检索query、topK、query rewrite、hybrid和rerank开关。代码侧会校验Planner输出，只执行白名单动作；知识库检索低置信度时会进入Post-RAG Planner，由Agent结合检索摘要决定澄清、联网补充或拒答。`AgentTrace`会记录上下文版本、消息数量、Token数、降级状态、Planner决策、知识库轻量探测、知识库检索、联网搜索和最终回答模式，但不返回摘要正文。
 
 连续问答场景下，`conversation_id`由后端托管。新会话请求可以不传`conversation_id`，服务端会生成新ID、写入问答日志并在响应中返回；同一聊天窗口后续追问时，前端继续携带上次返回的ID：
 
@@ -251,9 +253,7 @@ Agent Router基于Eino ChatModel实现LLM Planner，并使用原生function call
 }
 ```
 
-当请求携带`conversation_id`时，服务端会按`user_id`、`knowledge_base_id`和`conversation_id`校验归属；如果会话不存在或不属于当前用户和知识库，会直接拒绝。新会话虽然会生成ID，但首轮不会暴露`context_lookup`工具，避免新话题被旧上下文污染。
-
-如果上一轮最终模式是`clarify`，下一轮用户补充信息时会强制先执行`context_lookup`，再交给Context-Resolved Planner决策。这样“基础套餐”“就是那个流程”这类补充能接上上一轮澄清问题，而不是被当成孤立单轮问题。
+当请求携带`conversation_id`时，服务端会按`user_id`、`knowledge_base_id`和`conversation_id`校验归属。会话在最后一次成功问答7天后过期；同一会话同一时间只允许一个活跃请求，其他请求返回409，不同会话仍可并行处理。新会话记录和首轮`chat_log`在同一事务中创建，旧版本中只有`chat_logs`而没有`conversations`记录的会话不会回填。
 
 ## 配置说明
 
@@ -296,6 +296,23 @@ source_sync:
 
 同步任务通过数据库`sync_task_id`和条件状态更新防止同一知识源并发执行。普通失败进入RabbitMQ延迟重试队列，超过上限后保留`failed`状态并进入DLQ；`failed`不会被定时调度器自动重启，需要用户手动触发恢复。服务异常退出后，调度器会重新抢占租约过期的`queued`或`syncing`任务。
 
+Agent短期记忆默认配置：
+
+```yaml
+agent_memory:
+  short_term_enabled: true
+  summary_trigger_tokens: 4000
+  context_hard_limit_tokens: 6000
+  keep_recent_tokens: 2000
+  summary_target_tokens: 1000
+  summary_timeout_seconds: 120
+  compaction_lease_seconds: 180
+  conversation_processing_lease_seconds: 180
+  conversation_ttl_hours: 168
+```
+
+`short_term_enabled=false`时临时回退到旧`context_lookup`链路。摘要任务复用当前ChatModel和RabbitMQ延迟重试拓扑，任务失败不会阻断主问答。
+
 远端文档第一次在完整列表中缺失时会进入`missing`状态并异步删除Qdrant、Bluge和父子切片，使其不能继续被RAG检索，同时保留MinIO原文和Document记录。连续两次完整同步缺失后才执行物理删除；如果文档重新出现，则重新拉取并恢复索引。
 
 ## 开发
@@ -319,7 +336,7 @@ git status --short
 git ls-files config.yaml docker-compose.yml docs
 ```
 
-如果本地配置、Docker Compose文件和内部文档没有被跟踪，最后一条命令应该没有输出。
+该命令不应输出本地配置或Docker Compose文件；`docs/short-term-memory-implementation.md`属于明确加入白名单的实现说明，可以被跟踪。
 
 ## 仓库策略
 
@@ -328,5 +345,5 @@ git ls-files config.yaml docker-compose.yml docs
 - 不提交`config.yaml`
 - 不提交`.env`
 - 不提交本地`docker-compose.yml`
-- 不提交`docs/`下的内部规划文档
+- `docs/`默认忽略，仅跟踪明确加入白名单的实现说明
 - 配置字段变化时同步更新`config.yaml.example`

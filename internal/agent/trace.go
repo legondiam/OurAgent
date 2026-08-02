@@ -7,23 +7,27 @@ const (
 	IntentWebAugmentedQA  = "web_augmented_qa"
 	IntentUnclearQuestion = "unclear_question"
 
-	FinalModeKnowledgeBase = "knowledge_base"
-	FinalModeWebFallback   = "web_fallback"
-	FinalModeDirectAnswer  = "direct_answer"
-	FinalModeClarify       = "clarify"
-	FinalModeRejected      = "rejected"
+	FinalModeKnowledgeBase      = "knowledge_base"
+	FinalModeWebFallback        = "web_fallback"
+	FinalModeDirectAnswer       = "direct_answer"
+	FinalModeConversationAnswer = "conversation_answer"
+	FinalModeClarify            = "clarify"
+	FinalModeRejected           = "rejected"
 
-	ToolKnowledgeSearch = "knowledge_search"
-	ToolWebSearch       = "web_search"
-	ToolAgentPlanner    = "agent_planner"
-	ToolContextLookup   = "context_lookup"
-	ToolKnowledgeProbe  = "knowledge_probe"
-	ToolDirectAnswer    = "direct_answer"
+	ToolKnowledgeSearch     = "knowledge_search"
+	ToolWebSearch           = "web_search"
+	ToolAgentPlanner        = "agent_planner"
+	ToolContextLookup       = "context_lookup"
+	ToolKnowledgeProbe      = "knowledge_probe"
+	ToolDirectAnswer        = "direct_answer"
+	ToolConversationAnswer  = "conversation_answer"
+	ToolConversationContext = "conversation_context"
 
 	StatusSuccess       = "success"
 	StatusLowConfidence = "low_confidence"
 	StatusError         = "error"
 	StatusSkipped       = "skipped"
+	StatusDegraded      = "degraded"
 )
 
 type Trace struct {
@@ -41,6 +45,27 @@ type Trace struct {
 	ProbeEvidence   *ProbeEvidence `json:"probe_evidence,omitempty"`
 	PostRAGDecision *Decision      `json:"post_rag_decision,omitempty"`
 	PlannerError    string         `json:"planner_error,omitempty"`
+}
+
+// MarkContextAssembled记录内部短期上下文装配结果
+func (t *Trace) MarkContextAssembled(context ConversationContext) {
+	status := StatusSuccess
+	if context.Degraded {
+		status = StatusDegraded
+	}
+	t.AddStep(Step{
+		Tool:   ToolConversationContext,
+		Action: "assemble",
+		Status: status,
+		Reason: context.DegradedReason,
+		Metadata: map[string]any{
+			"summary_version":       context.SummaryVersion,
+			"summarized_through_id": context.SummarizedThroughID,
+			"message_count":         len(context.Messages),
+			"estimated_tokens":      context.EstimatedTokens,
+			"degraded":              context.Degraded,
+		},
+	})
 }
 
 type Step struct {

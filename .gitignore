@@ -16,3 +16,6 @@ internal/eval/
 !config.yaml.example
 *.tex
 *.log
+!docs/
+docs/*
+!docs/short-term-memory-implementation.md

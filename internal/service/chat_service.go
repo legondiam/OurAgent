@@ -17,26 +17,35 @@ import (
 	"OurAgent/internal/websearch"
 
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/google/uuid"
 	pkgerrors "github.com/pkg/errors"
 	"gorm.io/datatypes"
 )
 
 type ChatService struct {
-	kbs       *repository.KnowledgeBaseRepository
-	docs      *repository.DocumentRepository
-	logs      *repository.ChatLogRepository
-	retriever rag.Retriever
-	chain     *rag.RAGChain
-	web       websearch.Answerer
-	cfg       *config.Config
+	kbs                 *repository.KnowledgeBaseRepository
+	docs                *repository.DocumentRepository
+	logs                *repository.ChatLogRepository
+	retriever           rag.Retriever
+	chain               *rag.RAGChain
+	web                 websearch.Answerer
+	cfg                 *config.Config
+	conversations       *repository.ConversationRepository
+	compactionPublisher ConversationCompactionPublisher
+}
+
+type ConversationCompactionPublisher interface {
+	PublishConversationCompact(ctx context.Context, task repository.ConversationCompactionTask) error
 }
 
 type ChatRequest struct {
-	UserID          uint64
-	KnowledgeBaseID uint64
-	ConversationID  string
-	Question        string
-	WebSearch       bool
+	UserID                      uint64
+	KnowledgeBaseID             uint64
+	ConversationID              string
+	Question                    string
+	WebSearch                   bool
+	ConversationProcessingToken string
+	NewConversation             bool
 }
 
 type KnowledgeSearchOptions struct {
@@ -45,6 +54,12 @@ type KnowledgeSearchOptions struct {
 	Rerank       *bool
 	TopK         int
 	Query        string
+}
+
+// ConfigureShortTermMemory配置Agent短期记忆持久化
+func (s *ChatService) ConfigureShortTermMemory(conversations *repository.ConversationRepository, publisher ConversationCompactionPublisher) {
+	s.conversations = conversations
+	s.compactionPublisher = publisher
 }
 
 type ChatResponse struct {
@@ -452,6 +467,8 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		UserID:                      req.UserID,
 		KnowledgeBaseID:             req.KnowledgeBaseID,
 		ConversationID:              strings.TrimSpace(req.ConversationID),
+		ConversationProcessingToken: req.ConversationProcessingToken,
+		NewConversation:             req.NewConversation,
 		Question:                    req.Question,
 		TopK:                        topK,
 		ScoreThreshold:              scoreThreshold,
@@ -505,30 +522,78 @@ func (s *ChatService) saveLogWithAgent(prepared *rag.PreparedChat, start time.Ti
 		rawAgentTrace, _ = json.Marshal(agentTrace)
 	}
 	log := model.ChatLog{
-		KnowledgeBaseID:  prepared.Request.KnowledgeBaseID,
-		UserID:           prepared.Request.UserID,
-		ConversationID:   prepared.Request.ConversationID,
-		Question:         prepared.Request.Question,
-		Answer:           prepared.Answer,
-		RetrievedChunks:  datatypes.JSON(rawSources),
-		RetrievalTrace:   datatypes.JSON(rawTrace),
-		AgentTrace:       datatypes.JSON(rawAgentTrace),
-		AnswerMode:       answerMode,
-		PromptPreview:    prepared.PromptPreview,
-		ModelName:        s.chain.ModelName(),
-		PromptTokens:     prepared.PromptTokens,
-		CompletionTokens: prepared.CompletionTokens,
-		ScoreThreshold:   prepared.Request.ScoreThreshold,
-		TopK:             prepared.Request.TopK,
-		MaxContextTokens: prepared.Request.MaxContextTokens,
-		StrictMode:       prepared.Request.StrictMode,
-		LatencyMS:        time.Since(start).Milliseconds(),
+		KnowledgeBaseID:    prepared.Request.KnowledgeBaseID,
+		UserID:             prepared.Request.UserID,
+		ConversationID:     prepared.Request.ConversationID,
+		Question:           prepared.Request.Question,
+		Answer:             prepared.Answer,
+		RetrievedChunks:    datatypes.JSON(rawSources),
+		RetrievalTrace:     datatypes.JSON(rawTrace),
+		AgentTrace:         datatypes.JSON(rawAgentTrace),
+		AnswerMode:         answerMode,
+		PromptPreview:      prepared.PromptPreview,
+		ModelName:          s.chain.ModelName(),
+		PromptTokens:       prepared.PromptTokens,
+		CompletionTokens:   prepared.CompletionTokens,
+		ScoreThreshold:     prepared.Request.ScoreThreshold,
+		TopK:               prepared.Request.TopK,
+		MaxContextTokens:   prepared.Request.MaxContextTokens,
+		StrictMode:         prepared.Request.StrictMode,
+		LatencyMS:          time.Since(start).Milliseconds(),
+		ConversationTokens: agent.EstimateConversationTurnTokens(prepared.Request.Question, prepared.Answer),
+		CreatedAt:          time.Now(),
 	}
 	if log.PromptTokens == 0 {
 		log.PromptTokens = document.EstimateTokens(prepared.Request.Question + prepared.ContextText + prepared.Answer)
 	}
-	if err := s.logs.Create(&log); err != nil {
+	if err := s.saveTurn(prepared.Request, &log); err != nil {
 		return 0, err
 	}
+	go func(savedLog model.ChatLog) {
+		publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.maybeQueueCompaction(publishCtx, savedLog)
+	}(log)
 	return log.ID, nil
+}
+
+func (s *ChatService) saveTurn(req rag.Request, log *model.ChatLog) error {
+	if s.conversations == nil || !s.cfg.Memory.ShortTermEnabled || (req.ConversationProcessingToken == "" && !req.NewConversation) {
+		return s.logs.Create(log)
+	}
+	expiresAt := log.CreatedAt.Add(time.Duration(s.cfg.Memory.ConversationTTLHours) * time.Hour)
+	if req.NewConversation {
+		conversation := &model.Conversation{
+			ID:                   req.ConversationID,
+			UserID:               req.UserID,
+			KnowledgeBaseID:      req.KnowledgeBaseID,
+			Status:               model.ConversationStatusActive,
+			SummarySchemaVersion: 1,
+			SummaryStatus:        model.ConversationSummaryStatusIdle,
+			UnsummarizedTokens:   log.ConversationTokens,
+			LastMessageAt:        log.CreatedAt,
+			ExpiresAt:            expiresAt,
+		}
+		return s.conversations.CreateWithFirstLog(conversation, log)
+	}
+	return s.conversations.AppendLogAndRefresh(log, req.ConversationProcessingToken, expiresAt)
+}
+
+func (s *ChatService) maybeQueueCompaction(ctx context.Context, log model.ChatLog) {
+	if s.conversations == nil || s.compactionPublisher == nil || !s.cfg.Memory.ShortTermEnabled || !s.cfg.Rabbit.Enabled {
+		return
+	}
+	taskID := uuid.NewString()
+	now := time.Now()
+	leaseSeconds := s.cfg.Memory.CompactionLeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 180
+	}
+	task, err := s.conversations.TryQueueCompaction(log.UserID, log.KnowledgeBaseID, log.ConversationID, taskID, s.cfg.Memory.SummaryTriggerTokens, now, now.Add(time.Duration(leaseSeconds)*time.Second))
+	if err != nil || task == nil {
+		return
+	}
+	if err := s.compactionPublisher.PublishConversationCompact(ctx, *task); err != nil {
+		_ = s.conversations.FailCompaction(task.ConversationID, task.TaskID, task.Attempt, err.Error())
+	}
 }

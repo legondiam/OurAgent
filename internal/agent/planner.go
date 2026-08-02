@@ -54,13 +54,21 @@ type RetrievalHitSummary struct {
 }
 
 type ConversationContext struct {
-	ConversationID string
-	Messages       []HistoryMessage
+	ConversationID      string
+	Summary             string
+	Messages            []HistoryMessage
+	SummarizedThroughID uint64
+	SummaryVersion      uint64
+	EstimatedTokens     int
+	Degraded            bool
+	DegradedReason      string
 }
 
 type HistoryMessage struct {
-	Question string
-	Answer   string
+	ChatLogID  uint64
+	Question   string
+	Answer     string
+	AnswerMode string
 }
 
 type KnowledgeProbeResult struct {

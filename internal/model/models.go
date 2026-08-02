@@ -32,6 +32,18 @@ const (
 	ExternalDocumentStatusFailed  = "failed"
 )
 
+const (
+	ConversationStatusActive  = "active"
+	ConversationStatusExpired = "expired"
+)
+
+const (
+	ConversationSummaryStatusIdle       = "idle"
+	ConversationSummaryStatusQueued     = "queued"
+	ConversationSummaryStatusProcessing = "processing"
+	ConversationSummaryStatusFailed     = "failed"
+)
+
 type User struct {
 	ID           uint64    `gorm:"primaryKey" json:"id"`
 	Username     string    `gorm:"size:100;uniqueIndex;not null" json:"username"`
@@ -161,27 +173,51 @@ type DocumentChildChunk struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
+type Conversation struct {
+	ID                   string         `gorm:"size:64;primaryKey" json:"id"`
+	UserID               uint64         `gorm:"index;index:idx_conversation_owner_status_expiry,priority:1;not null" json:"user_id"`
+	KnowledgeBaseID      uint64         `gorm:"index;index:idx_conversation_owner_status_expiry,priority:2;not null" json:"knowledge_base_id"`
+	Status               string         `gorm:"size:32;index;index:idx_conversation_owner_status_expiry,priority:3;not null" json:"status"`
+	SummaryJSON          datatypes.JSON `gorm:"type:json" json:"summary_json"`
+	SummarySchemaVersion int            `gorm:"not null;default:1" json:"summary_schema_version"`
+	SummarizedThroughID  uint64         `gorm:"not null;default:0" json:"summarized_through_id"`
+	UnsummarizedTokens   int            `gorm:"not null;default:0" json:"unsummarized_tokens"`
+	SummaryVersion       uint64         `gorm:"not null;default:0" json:"summary_version"`
+	SummaryStatus        string         `gorm:"size:32;index;not null" json:"summary_status"`
+	SummaryTaskID        string         `gorm:"size:64;index" json:"summary_task_id"`
+	SummaryAttempt       int            `gorm:"not null;default:0" json:"summary_attempt"`
+	SummaryLeaseUntil    *time.Time     `gorm:"index" json:"summary_lease_until"`
+	LastSummaryError     string         `gorm:"type:text" json:"last_summary_error"`
+	ProcessingToken      string         `gorm:"size:64;index" json:"processing_token"`
+	ProcessingLeaseUntil *time.Time     `gorm:"index" json:"processing_lease_until"`
+	LastMessageAt        time.Time      `gorm:"index;not null" json:"last_message_at"`
+	ExpiresAt            time.Time      `gorm:"index;index:idx_conversation_owner_status_expiry,priority:4;not null" json:"expires_at"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
+}
+
 type ChatLog struct {
-	ID               uint64         `gorm:"primaryKey" json:"id"`
-	KnowledgeBaseID  uint64         `gorm:"index;not null" json:"knowledge_base_id"`
-	UserID           uint64         `gorm:"index;not null" json:"user_id"`
-	ConversationID   string         `gorm:"size:64;index" json:"conversation_id"`
-	Question         string         `gorm:"type:text;not null" json:"question"`
-	Answer           string         `gorm:"type:longtext;not null" json:"answer"`
-	RetrievedChunks  datatypes.JSON `gorm:"type:json" json:"retrieved_chunks"`
-	RetrievalTrace   datatypes.JSON `gorm:"type:json" json:"retrieval_trace"`
-	AgentTrace       datatypes.JSON `gorm:"type:json" json:"agent_trace"`
-	AnswerMode       string         `gorm:"size:64" json:"answer_mode"`
-	PromptPreview    string         `gorm:"type:text" json:"prompt_preview"`
-	ModelName        string         `gorm:"size:100" json:"model_name"`
-	PromptTokens     int            `json:"prompt_tokens"`
-	CompletionTokens int            `json:"completion_tokens"`
-	ScoreThreshold   float64        `json:"score_threshold"`
-	TopK             int            `json:"top_k"`
-	MaxContextTokens int            `json:"max_context_tokens"`
-	StrictMode       bool           `json:"strict_mode"`
-	LatencyMS        int64          `json:"latency_ms"`
-	CreatedAt        time.Time      `json:"created_at"`
+	ID                 uint64         `gorm:"primaryKey;index:idx_chat_conversation_history,priority:4" json:"id"`
+	KnowledgeBaseID    uint64         `gorm:"index;index:idx_chat_conversation_history,priority:2;not null" json:"knowledge_base_id"`
+	UserID             uint64         `gorm:"index;index:idx_chat_conversation_history,priority:1;not null" json:"user_id"`
+	ConversationID     string         `gorm:"size:64;index;index:idx_chat_conversation_history,priority:3" json:"conversation_id"`
+	Question           string         `gorm:"type:text;not null" json:"question"`
+	Answer             string         `gorm:"type:longtext;not null" json:"answer"`
+	RetrievedChunks    datatypes.JSON `gorm:"type:json" json:"retrieved_chunks"`
+	RetrievalTrace     datatypes.JSON `gorm:"type:json" json:"retrieval_trace"`
+	AgentTrace         datatypes.JSON `gorm:"type:json" json:"agent_trace"`
+	AnswerMode         string         `gorm:"size:64" json:"answer_mode"`
+	PromptPreview      string         `gorm:"type:text" json:"prompt_preview"`
+	ModelName          string         `gorm:"size:100" json:"model_name"`
+	PromptTokens       int            `json:"prompt_tokens"`
+	CompletionTokens   int            `json:"completion_tokens"`
+	ConversationTokens int            `gorm:"not null;default:0" json:"conversation_tokens"`
+	ScoreThreshold     float64        `json:"score_threshold"`
+	TopK               int            `json:"top_k"`
+	MaxContextTokens   int            `json:"max_context_tokens"`
+	StrictMode         bool           `json:"strict_mode"`
+	LatencyMS          int64          `json:"latency_ms"`
+	CreatedAt          time.Time      `json:"created_at"`
 }
 
 type ChatFeedback struct {

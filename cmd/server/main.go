@@ -82,6 +82,7 @@ func main() {
 	sourceRepo := repository.NewSourceRepository(db)
 	chunkRepo := repository.NewChunkRepository(db)
 	chatLogRepo := repository.NewChatLogRepository(db)
+	conversationRepo := repository.NewConversationRepository(db)
 	vectorRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
 	bm25Retriever := rag.NewBM25Retriever(documentRepo, chunkRepo, keywordStore)
 	ragRetriever := rag.NewHybridRetriever(vectorRetriever, bm25Retriever)
@@ -130,6 +131,12 @@ func main() {
 	if err != nil {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
 	}
+	chatService.ConfigureShortTermMemory(conversationRepo, taskProducer)
+	conversationCompactor := service.NewConversationCompactor(conversationRepo, chatLogRepo, chatModel, cfg.Memory)
+	conversationCompactConsumer := tasks.NewConversationCompactConsumer(rabbitClient, conversationRepo, conversationCompactor, cfg)
+	if err := conversationCompactConsumer.Start(ctx, cfg.Rabbit.ConversationCompactQueue); err != nil {
+		logger.Logger.Fatal("启动会话摘要消费者失败", zap.Error(err))
+	}
 
 	authHandler := handler.NewAuthHandler(authService)
 	kbHandler := handler.NewKnowledgeBaseHandler(kbService)
@@ -138,7 +145,9 @@ func main() {
 	oauthHandler := handler.NewOAuthHandler(appoauth.NewNotionService(cfg.OAuth.Notion, cfg.JWT.Secret, sourceRepo))
 	chatHandler := handler.NewChatHandler(chatService)
 	agentPlanner := agent.NewLLMPlanner(rewriteChatModel)
-	agentHandler := handler.NewAgentHandler(service.NewAgentService(chatService, agentPlanner, chatModel))
+	agentService := service.NewAgentService(chatService, agentPlanner, chatModel)
+	agentService.ConfigureShortTermMemory(conversationRepo, service.NewConversationContextAssembler(conversationRepo, chatLogRepo, cfg.Memory), cfg.Memory)
+	agentHandler := handler.NewAgentHandler(agentService)
 
 	r := router.New(router.Dependencies{
 		JWTSecret:       cfg.JWT.Secret,

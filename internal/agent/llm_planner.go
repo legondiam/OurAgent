@@ -45,9 +45,10 @@ func (p *LLMPlanner) Plan(ctx context.Context, input PlannerInput) (Decision, er
 }
 
 type plannerToolArgs struct {
-	Reason          string          `json:"reason"`
-	SearchPlan      json.RawMessage `json:"search_plan,omitempty"`
-	ClarifyQuestion *string         `json:"clarify_question,omitempty"`
+	Reason           string          `json:"reason"`
+	SearchPlan       json.RawMessage `json:"search_plan,omitempty"`
+	ClarifyQuestion  *string         `json:"clarify_question,omitempty"`
+	SourceChatLogIDs []uint64        `json:"source_chat_log_ids,omitempty"`
 }
 
 // ParseToolCallDecision解析Planner工具调用
@@ -71,8 +72,9 @@ func ParseToolCallDecision(calls []schema.ToolCall, input PlannerInput) (Decisio
 		return Decision{}, fmt.Errorf("%s缺少reason", action)
 	}
 	decision := Decision{
-		Action: action,
-		Reason: args.Reason,
+		Action:           action,
+		Reason:           args.Reason,
+		SourceChatLogIDs: args.SourceChatLogIDs,
 	}
 	switch action {
 	case ActionKnowledgeProbe, ActionKnowledgeSearch:
@@ -89,11 +91,24 @@ func ParseToolCallDecision(calls []schema.ToolCall, input PlannerInput) (Decisio
 			return Decision{}, fmt.Errorf("%s缺少clarify_question", action)
 		}
 		decision.ClarifyQuestion = *args.ClarifyQuestion
+	case ActionConversationAnswer:
+		if !hasValidSourceChatLogID(args.SourceChatLogIDs) {
+			return Decision{}, fmt.Errorf("%s缺少source_chat_log_ids", action)
+		}
 	case ActionContextLookup, ActionDirectAnswer, ActionWebSearch, ActionReject:
 	default:
 		return Decision{}, fmt.Errorf("不支持function：%s", action)
 	}
 	return decision, nil
+}
+
+func hasValidSourceChatLogID(ids []uint64) bool {
+	for _, id := range ids {
+		if id != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func parseSearchPlanArg(raw json.RawMessage) (SearchPlan, error) {
@@ -130,6 +145,20 @@ func plannerToolInfo(action Action, desc string) *schema.ToolInfo {
 	switch action {
 	case ActionContextLookup:
 		return reasonOnlyTool(action, desc)
+	case ActionConversationAnswer:
+		return &schema.ToolInfo{
+			Name: string(action),
+			Desc: desc,
+			ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+				"reason": requiredStringParam("选择该动作的原因"),
+				"source_chat_log_ids": {
+					Type:     schema.Array,
+					Desc:     "需要复述或转换的会话日志ID",
+					Required: true,
+					ElemInfo: &schema.ParameterInfo{Type: schema.Integer},
+				},
+			}),
+		}
 	case ActionKnowledgeProbe:
 		return &schema.ToolInfo{
 			Name: string(action),
@@ -278,7 +307,10 @@ func buildPlannerPrompt(input PlannerInput) string {
 		b.WriteString("如果用户问题依赖实时公开信息、官方状态、最新公告、价格或API变化，且probe没有明确内部资料，优先web_search。\n")
 		b.WriteString("如果服务端Probe证据判断为weak或none，不要仅因为有相似文档命中就选择knowledge_search。\n\n")
 	} else if input.Stage == PlannerStageContextResolved {
-		b.WriteString("已经读取会话历史。你可以选择knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
+		b.WriteString("已经自动读取会话历史。当前问题优先于历史，只能使用相关话题，不要把其他话题的实体补入当前问题。\n")
+		b.WriteString("如果用户只是复述、缩写、翻译、格式转换或比较既有回答，选择conversation_answer并给出source_chat_log_ids。\n")
+		b.WriteString("如果用户提出版本、有效性、适用范围、例外或其他新的企业事实判断，必须选择knowledge_probe或knowledge_search，不要选择conversation_answer。\n")
+		b.WriteString("你可以选择conversation_answer、knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject，不要选择context_lookup。\n")
 		b.WriteString("如果选择knowledge_search，search_plan.query必须是结合会话历史后的独立完整问题。\n\n")
 	} else {
 		b.WriteString("你可以选择context_lookup、knowledge_probe、direct_answer、clarify、knowledge_search、web_search或reject。\n")
@@ -346,13 +378,20 @@ func writeProbeEvidence(b *strings.Builder, evidence *ProbeEvidence) {
 
 func writeConversationContext(b *strings.Builder, context *ConversationContext) {
 	b.WriteString("\n\n会话历史：\n")
+	if strings.TrimSpace(context.Summary) != "" {
+		b.WriteString("会话摘要：\n")
+		b.WriteString(context.Summary)
+		b.WriteString("\n\n摘要后的原始问答：\n")
+	}
 	if len(context.Messages) == 0 {
 		b.WriteString("[]\n")
 		return
 	}
 	for i, message := range context.Messages {
 		b.WriteString(intString(i + 1))
-		b.WriteString(". 用户：")
+		b.WriteString(". chat_log_id=")
+		b.WriteString(strconv.FormatUint(message.ChatLogID, 10))
+		b.WriteString("\n   用户：")
 		b.WriteString(message.Question)
 		b.WriteString("\n   助手：")
 		b.WriteString(message.Answer)

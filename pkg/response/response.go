@@ -19,6 +19,8 @@ const (
 	CodeChatLogNotFound       = 3006
 	CodeInvalidFeedback       = 3007
 	CodeDocumentIndexing      = 3008
+	CodeConversationBusy      = 3009
+	CodeConversationExpired   = 3010
 
 	CodeInternal = 5000
 )
@@ -37,6 +39,16 @@ func Success(c *gin.Context, data interface{}) {
 // BusinessError 返回业务错误响应
 func BusinessError(c *gin.Context, code int, msg string) {
 	c.JSON(400, Body{Code: code, Msg: msg})
+}
+
+// Conflict返回资源并发冲突
+func Conflict(c *gin.Context, code int, msg string) {
+	c.JSON(409, Body{Code: code, Msg: msg})
+}
+
+// Gone返回已过期资源
+func Gone(c *gin.Context, code int, msg string) {
+	c.JSON(410, Body{Code: code, Msg: msg})
 }
 
 // ServerError 返回服务器错误响应

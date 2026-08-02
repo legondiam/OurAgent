@@ -56,6 +56,8 @@ type Request struct {
 	UserID                      uint64
 	KnowledgeBaseID             uint64
 	ConversationID              string
+	ConversationProcessingToken string
+	NewConversation             bool
 	Question                    string
 	SearchQuery                 string
 	TopK                        int

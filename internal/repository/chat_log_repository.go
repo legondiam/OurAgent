@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"sort"
 
 	"OurAgent/internal/model"
 
@@ -12,6 +13,40 @@ import (
 
 type ChatLogRepository struct {
 	db *gorm.DB
+}
+
+// ListAfterIDByConversation查询摘要游标之后的完整问答
+func (r *ChatLogRepository) ListAfterIDByConversation(userID, knowledgeBaseID uint64, conversationID string, afterID uint64) ([]model.ChatLog, error) {
+	var logs []model.ChatLog
+	if err := r.db.Where("user_id = ? AND knowledge_base_id = ? AND conversation_id = ? AND id > ?", userID, knowledgeBaseID, conversationID, afterID).
+		Order("id asc").Find(&logs).Error; err != nil {
+		return nil, pkgerrors.WithMessage(err, "查询会话增量日志失败")
+	}
+	return logs, nil
+}
+
+// ListRangeByConversation查询会话指定日志范围
+func (r *ChatLogRepository) ListRangeByConversation(userID, knowledgeBaseID uint64, conversationID string, afterID, throughID uint64) ([]model.ChatLog, error) {
+	var logs []model.ChatLog
+	if err := r.db.Where("user_id = ? AND knowledge_base_id = ? AND conversation_id = ? AND id > ? AND id <= ?", userID, knowledgeBaseID, conversationID, afterID, throughID).
+		Order("id asc").Find(&logs).Error; err != nil {
+		return nil, pkgerrors.WithMessage(err, "查询会话范围日志失败")
+	}
+	return logs, nil
+}
+
+// FindManyOwnedByConversation批量查询当前会话日志
+func (r *ChatLogRepository) FindManyOwnedByConversation(userID, knowledgeBaseID uint64, conversationID string, ids []uint64) ([]model.ChatLog, error) {
+	if len(ids) == 0 {
+		return []model.ChatLog{}, nil
+	}
+	var logs []model.ChatLog
+	if err := r.db.Where("user_id = ? AND knowledge_base_id = ? AND conversation_id = ? AND id IN ?", userID, knowledgeBaseID, conversationID, ids).
+		Find(&logs).Error; err != nil {
+		return nil, pkgerrors.WithMessage(err, "批量查询会话日志失败")
+	}
+	sort.Slice(logs, func(i, j int) bool { return logs[i].ID < logs[j].ID })
+	return logs, nil
 }
 
 func NewChatLogRepository(db *gorm.DB) *ChatLogRepository {
