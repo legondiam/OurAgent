@@ -16,6 +16,7 @@ type Dependencies struct {
 	AgentHandler    *handler.AgentHandler
 	SourceHandler   *handler.SourceHandler
 	OAuthHandler    *handler.OAuthHandler
+	MemoryHandler   *handler.MemoryHandler
 }
 
 func New(deps Dependencies) *gin.Engine {
@@ -62,4 +63,11 @@ func registerProtectedRoutes(api *gin.RouterGroup, deps Dependencies) {
 	protected.POST("/knowledge-bases/:id/agent/chat", deps.AgentHandler.Chat)
 	protected.GET("/chat-logs", deps.ChatHandler.ListLogs)
 	protected.POST("/chat-logs/:id/feedback", deps.ChatHandler.Feedback)
+	if deps.MemoryHandler != nil {
+		protected.GET("/memories", deps.MemoryHandler.List)
+		protected.DELETE("/memories", deps.MemoryHandler.DeleteByScope)
+		protected.POST("/memories/:id/confirm", deps.MemoryHandler.Confirm)
+		protected.PATCH("/memories/:id", deps.MemoryHandler.Update)
+		protected.DELETE("/memories/:id", deps.MemoryHandler.Delete)
+	}
 }

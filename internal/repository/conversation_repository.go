@@ -79,6 +79,23 @@ func (r *ConversationRepository) CreateWithFirstLog(conversation *model.Conversa
 	})
 }
 
+// CreateWithFirstLogAndSignal 原子创建会话、首轮日志和长期记忆Signal
+func (r *ConversationRepository) CreateWithFirstLogAndSignal(conversation *model.Conversation, log *model.ChatLog, signal *model.MemoryConsolidationSignal) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(conversation).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+		if signal != nil {
+			signal.ChatLogID = log.ID
+			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(signal).Error
+		}
+		return nil
+	})
+}
+
 // AppendLogAndRefresh保存问答并刷新会话状态
 func (r *ConversationRepository) AppendLogAndRefresh(log *model.ChatLog, processingToken string, expiresAt time.Time) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
@@ -94,6 +111,29 @@ func (r *ConversationRepository) AppendLogAndRefresh(log *model.ChatLog, process
 				"processing_token":       "",
 				"processing_lease_until": nil,
 			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrConversationProcessingLeaseLost
+		}
+		return nil
+	})
+}
+
+// AppendLogRefreshAndSignal 原子追加日志、刷新会话并写入长期记忆Signal
+func (r *ConversationRepository) AppendLogRefreshAndSignal(log *model.ChatLog, processingToken string, expiresAt time.Time, signal *model.MemoryConsolidationSignal) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+		if signal != nil {
+			signal.ChatLogID = log.ID
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(signal).Error; err != nil {
+				return err
+			}
+		}
+		result := tx.Model(&model.Conversation{}).Where("id = ? AND user_id = ? AND knowledge_base_id = ? AND processing_token = ?", log.ConversationID, log.UserID, log.KnowledgeBaseID, processingToken).Updates(map[string]any{"unsummarized_tokens": gorm.Expr("unsummarized_tokens + ?", log.ConversationTokens), "last_message_at": log.CreatedAt, "expires_at": expiresAt, "processing_token": "", "processing_lease_until": nil})
 		if result.Error != nil {
 			return result.Error
 		}

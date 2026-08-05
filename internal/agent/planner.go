@@ -30,6 +30,26 @@ type PlannerInput struct {
 	Context       *ConversationContext
 	ProbeResult   *KnowledgeProbeResult
 	ProbeEvidence *ProbeEvidence
+	LongTermMemory *LongTermMemoryContext
+}
+
+type LongTermMemoryContext struct {
+	Items                     []LongTermMemoryItem
+	EstimatedTokens           int
+	FixedCount                int
+	LexicalCount              int
+	SemanticCount             int
+	SemanticRecallTriggered   bool
+	RecallGateReason          string
+	SemanticRetrievalDegraded bool
+}
+
+type LongTermMemoryItem struct {
+	MemoryID uint64
+	Type     string
+	Scope    string
+	Content  string
+	Score    float64
 }
 
 type ToolSpec struct {

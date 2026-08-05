@@ -59,6 +59,7 @@ type Request struct {
 	ConversationProcessingToken string
 	NewConversation             bool
 	Question                    string
+	OriginalQuestion            string
 	SearchQuery                 string
 	TopK                        int
 	ScoreThreshold              float64
@@ -75,6 +76,8 @@ type Request struct {
 	RerankCandidateLimit        int
 	RerankTopN                  int
 	WebSearch                   bool
+	PendingMemoryOperation      *model.PendingMemoryOperation
+	AgentTurn                   bool
 }
 
 func (r Request) EffectiveSearchQuery() string {

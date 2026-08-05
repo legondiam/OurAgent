@@ -70,6 +70,9 @@ rabbitmq:
   delete_queue: "ouragent.document.delete.cleanup"
   source_sync_queue: "ouragent.source.sync"
   conversation_compact_queue: "ouragent.conversation.compact"
+  memory_consolidate_queue: "ouragent.memory.consolidate"
+  memory_index_queue: "ouragent.memory.index"
+  memory_delete_queue: "ouragent.memory.delete"
   retry_delay_seconds: 30
   max_retries: 5
   index_lease_seconds: 1800
@@ -77,6 +80,9 @@ rabbitmq:
   delete_workers: 2
   source_sync_workers: 1
   conversation_compact_workers: 1
+  memory_consolidate_workers: 1
+  memory_index_workers: 1
+  memory_delete_workers: 1
   prefetch_count: 1
 
 source_sync:
@@ -95,6 +101,35 @@ agent_memory:
   compaction_lease_seconds: 180
   conversation_processing_lease_seconds: 180
   conversation_ttl_hours: 168
+
+long_term_memory:
+  enabled: false
+  collection: "our_agent_memories"
+  directive_enabled: true
+  consolidation_enabled: true
+  worthiness_gate_enabled: true
+  semantic_recall_enabled: true
+  semantic_top_k: 12
+  final_top_k: 6
+  similarity_threshold: 0.70
+  max_context_tokens: 1200
+  retrieval_timeout_seconds: 3
+  directive_timeout_seconds: 30
+  consolidation_timeout_seconds: 120
+  candidate_expire_hours: 720
+  preference_ttl_hours: 4320
+  role_ttl_hours: 4320
+  terminology_ttl_hours: 4320
+  business_object_ttl_hours: 2160
+  project_context_ttl_hours: 2160
+  auto_promote_min_conversations: 2
+  consolidation_idle_seconds: 300
+  consolidation_max_signals: 10
+  consolidation_max_input_tokens: 4000
+  max_candidates_per_batch: 5
+  task_lease_seconds: 180
+  scheduler_interval_seconds: 30
+  scheduler_batch_size: 100
 
 web_search:
   enabled: true

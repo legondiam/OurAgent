@@ -23,13 +23,17 @@ import (
 )
 
 type AgentService struct {
-	chat             *ChatService
-	planner          agent.Planner
-	directChat       einomodel.BaseChatModel
-	postPlanner      *agent.PostRAGPlanner
-	conversations    *repository.ConversationRepository
-	contextAssembler *ConversationContextAssembler
-	memoryCfg        config.AgentMemoryConfig
+	chat               *ChatService
+	planner            agent.Planner
+	directChat         einomodel.BaseChatModel
+	postPlanner        *agent.PostRAGPlanner
+	conversations      *repository.ConversationRepository
+	contextAssembler   *ConversationContextAssembler
+	memoryCfg          config.AgentMemoryConfig
+	longTermCfg        config.LongTermMemoryConfig
+	longTermRetriever  *LongTermMemoryRetriever
+	directiveMatcher   MemoryDirectiveMatcher
+	directiveProcessor *MemoryDirectiveProcessor
 }
 
 // ConfigureShortTermMemory启用新的短期记忆链路
@@ -37,6 +41,13 @@ func (s *AgentService) ConfigureShortTermMemory(conversations *repository.Conver
 	s.conversations = conversations
 	s.contextAssembler = assembler
 	s.memoryCfg = cfg
+}
+
+// ConfigureLongTermMemory 配置Agent长期记忆内部组件
+func (s *AgentService) ConfigureLongTermMemory(retriever *LongTermMemoryRetriever, processor *MemoryDirectiveProcessor, cfg config.LongTermMemoryConfig) {
+	s.longTermRetriever = retriever
+	s.directiveProcessor = processor
+	s.longTermCfg = cfg
 }
 
 type AgentChatRequest struct {
@@ -105,13 +116,31 @@ func NewAgentService(chat *ChatService, planner agent.Planner, directChats ...ei
 func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentChatResponse, error) {
 	start := time.Now()
 	trace := agent.NewTrace(agent.IntentKnowledgeQA)
+	preflight, err := s.chat.authorizeRequest(ctx, ChatRequest{UserID: req.UserID, KnowledgeBaseID: req.KnowledgeBaseID, Question: req.Question, OriginalQuestion: req.Question, AgentTurn: true})
+	if err != nil {
+		return nil, err
+	}
+	directivePossible := s.longTermCfg.Enabled && s.longTermCfg.DirectiveEnabled && s.directiveProcessor != nil && s.directiveMatcher.MayContainDirective(req.Question)
+	type memoryRetrieveResult struct {
+		context agent.LongTermMemoryContext
+		err     error
+	}
+	var memoryResult <-chan memoryRetrieveResult
+	if s.longTermCfg.Enabled && s.longTermRetriever != nil && !directivePossible {
+		resultChannel := make(chan memoryRetrieveResult, 1)
+		memoryResult = resultChannel
+		go func(question string) {
+			memoryContext, retrieveErr := s.longTermRetriever.Retrieve(ctx, LongTermMemoryRetrieveRequest{UserID: req.UserID, KnowledgeBaseID: req.KnowledgeBaseID, Question: question})
+			resultChannel <- memoryRetrieveResult{context: memoryContext, err: retrieveErr}
+		}(req.Question)
+	}
 
 	conversationID := ""
 	var latest *model.ChatLog
 	var conversationContext *agent.ConversationContext
 	processingToken := ""
 	isNewConversation := false
-	var err error
+	err = nil
 	if s.memoryCfg.ShortTermEnabled && s.conversations != nil && s.contextAssembler != nil {
 		conversationID, isNewConversation, processingToken, conversationContext, err = s.prepareShortTermConversation(req)
 	} else {
@@ -134,22 +163,74 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 		KnowledgeBaseID:             req.KnowledgeBaseID,
 		ConversationID:              conversationID,
 		Question:                    req.Question,
+		OriginalQuestion:            req.Question,
 		ConversationProcessingToken: processingToken,
 		NewConversation:             isNewConversation,
+		AgentTurn:                   true,
 	}
 
-	// 先校验知识库归属，避免直接联网路径绕过权限
-	resolved, err := s.chat.authorizeRequest(ctx, chatReq)
-	if err != nil {
-		return nil, err
+	resolved := preflight
+	resolved.ConversationID = conversationID
+	resolved.ConversationProcessingToken = processingToken
+	resolved.NewConversation = isNewConversation
+	if directivePossible {
+		if trace.Memory == nil {
+			trace.Memory = &agent.MemoryTrace{Enabled: true}
+		}
+		trace.Memory.DirectiveDetected = true
+		directive, directiveErr := s.directiveProcessor.Process(ctx, req.Question)
+		if directiveErr != nil {
+			return nil, directiveErr
+		}
+		if directive.Operation != nil {
+			resolved.PendingMemoryOperation = directive.Operation
+			chatReq.PendingMemoryOperation = directive.Operation
+			if directive.ResidualQuestion == "" {
+				trace.FinalMode = agent.FinalModeDirectAnswer
+				prepared := &rag.PreparedChat{Request: resolved, Answer: directive.Confirmation, Sources: []rag.Source{}, Trace: rag.NewTrace(resolved, "显式长期记忆指令")}
+				return s.saveAgentResponse(prepared, trace, start)
+			}
+			req.Question = directive.ResidualQuestion
+			chatReq.Question = directive.ResidualQuestion
+			resolved.Question = directive.ResidualQuestion
+		} else if directive.Handled && directive.ResidualQuestion == "" {
+			trace.FinalMode = agent.FinalModeDirectAnswer
+			prepared := &rag.PreparedChat{Request: resolved, Answer: directive.Confirmation, Sources: []rag.Source{}, Trace: rag.NewTrace(resolved, "长期记忆指令未执行")}
+			return s.saveAgentResponse(prepared, trace, start)
+		}
+	}
+	var longTermContext *agent.LongTermMemoryContext
+	if s.longTermCfg.Enabled && s.longTermRetriever != nil {
+		var memoryContext agent.LongTermMemoryContext
+		var retrieveErr error
+		if memoryResult != nil {
+			result := <-memoryResult
+			memoryContext, retrieveErr = result.context, result.err
+		} else {
+			memoryContext, retrieveErr = s.longTermRetriever.Retrieve(ctx, LongTermMemoryRetrieveRequest{UserID: req.UserID, KnowledgeBaseID: req.KnowledgeBaseID, Question: req.Question})
+		}
+		if retrieveErr == nil {
+			longTermContext = &memoryContext
+			trace.MarkLongTermMemory(memoryContext)
+		} else {
+			degraded := agent.LongTermMemoryContext{SemanticRetrievalDegraded: true}
+			longTermContext = &degraded
+			trace.MarkLongTermMemory(degraded)
+		}
+	}
+	if s.longTermCfg.Enabled {
+		if trace.Memory == nil {
+			trace.Memory = &agent.MemoryTrace{Enabled: true}
+		}
+		trace.Memory.WorthinessSignal = string((MemoryWorthinessGate{}).Evaluate(persistedAgentQuestion(resolved)))
 	}
 
 	var decision agent.Decision
 	if conversationContext != nil {
-		decision = s.planWithAssembledContext(ctx, req.Question, *conversationContext, &trace)
+		decision = s.planWithAssembledContext(ctx, req.Question, *conversationContext, longTermContext, &trace)
 		trace.MarkContextResolvedDecision(decision)
 	} else if latest != nil && latest.AnswerMode == agent.FinalModeClarify {
-		decision = s.planWithConversationContext(ctx, req, &trace)
+		decision = s.planWithConversationContext(ctx, req, longTermContext, &trace)
 		trace.MarkContextResolvedDecision(decision)
 	} else {
 		plannerConversationID := ""
@@ -157,15 +238,15 @@ func (s *AgentService) Chat(ctx context.Context, req AgentChatRequest) (*AgentCh
 			plannerConversationID = conversationID
 		}
 		// 先由LLMPlanner决定是否检索以及如何检索
-		decision = s.plan(ctx, req.Question, plannerConversationID, &trace)
+		decision = s.plan(ctx, req.Question, plannerConversationID, longTermContext, &trace)
 		trace.MarkPlannerDecision(decision)
 		if decision.Action == agent.ActionContextLookup {
-			decision = s.planWithConversationContext(ctx, req, &trace)
+			decision = s.planWithConversationContext(ctx, req, longTermContext, &trace)
 			trace.MarkContextResolvedDecision(decision)
 		}
 	}
 	if decision.Action == agent.ActionKnowledgeProbe {
-		decision = s.planWithKnowledgeProbe(ctx, chatReq, decision, &trace)
+		decision = s.planWithKnowledgeProbe(ctx, chatReq, decision, longTermContext, &trace)
 		trace.MarkProbeResolvedDecision(decision)
 	}
 
@@ -248,14 +329,15 @@ func (s *AgentService) prepareShortTermConversation(req AgentChatRequest) (strin
 	return conversationID, false, token, &context, nil
 }
 
-func (s *AgentService) planWithAssembledContext(ctx context.Context, question string, conversationContext agent.ConversationContext, trace *agent.Trace) agent.Decision {
+func (s *AgentService) planWithAssembledContext(ctx context.Context, question string, conversationContext agent.ConversationContext, longTermContext *agent.LongTermMemoryContext, trace *agent.Trace) agent.Decision {
 	defaults := s.defaultSearchPlan(question)
 	input := agent.PlannerInput{
-		Stage:        agent.PlannerStageContextResolved,
-		UserQuestion: question,
-		Tools:        s.availableContextResolvedTools(),
-		WebEnabled:   s.canUseWebSearch(),
-		Context:      &conversationContext,
+		Stage:          agent.PlannerStageContextResolved,
+		UserQuestion:   question,
+		Tools:          s.availableContextResolvedTools(),
+		WebEnabled:     s.canUseWebSearch(),
+		Context:        &conversationContext,
+		LongTermMemory: longTermContext,
 	}
 	decision, err := s.planner.Plan(ctx, input)
 	if err != nil {
@@ -288,14 +370,23 @@ func newConversationID() string {
 	return "conv_" + uuid.NewString()
 }
 
+// persistedAgentQuestion 返回需要持久化的原始用户问题
+func persistedAgentQuestion(req rag.Request) string {
+	if strings.TrimSpace(req.OriginalQuestion) != "" {
+		return req.OriginalQuestion
+	}
+	return req.Question
+}
+
 // plan调用Planner并归一化决策
-func (s *AgentService) plan(ctx context.Context, question, conversationID string, trace *agent.Trace) agent.Decision {
+func (s *AgentService) plan(ctx context.Context, question, conversationID string, longTermContext *agent.LongTermMemoryContext, trace *agent.Trace) agent.Decision {
 	defaults := s.defaultSearchPlan(question)
 	input := agent.PlannerInput{
-		Stage:        agent.PlannerStagePreRAG,
-		UserQuestion: question,
-		Tools:        s.availableTools(conversationID),
-		WebEnabled:   s.canUseWebSearch(),
+		Stage:          agent.PlannerStagePreRAG,
+		UserQuestion:   question,
+		Tools:          s.availableTools(conversationID),
+		WebEnabled:     s.canUseWebSearch(),
+		LongTermMemory: longTermContext,
 	}
 	decision, err := s.planner.Plan(ctx, input)
 	if err != nil {
@@ -306,7 +397,7 @@ func (s *AgentService) plan(ctx context.Context, question, conversationID string
 }
 
 // planWithConversationContext读取会话历史并进行二次规划
-func (s *AgentService) planWithConversationContext(ctx context.Context, req AgentChatRequest, trace *agent.Trace) agent.Decision {
+func (s *AgentService) planWithConversationContext(ctx context.Context, req AgentChatRequest, longTermContext *agent.LongTermMemoryContext, trace *agent.Trace) agent.Decision {
 	contextResult, err := s.lookupConversationContext(ctx, req)
 	trace.MarkContextLookup(contextResult.Context.ConversationID, len(contextResult.Context.Messages), err)
 	if err != nil || len(contextResult.Context.Messages) == 0 {
@@ -319,11 +410,12 @@ func (s *AgentService) planWithConversationContext(ctx context.Context, req Agen
 
 	defaults := s.defaultSearchPlan(req.Question)
 	input := agent.PlannerInput{
-		Stage:        agent.PlannerStageContextResolved,
-		UserQuestion: req.Question,
-		Tools:        s.availableFinalTools(),
-		WebEnabled:   s.canUseWebSearch(),
-		Context:      &contextResult.Context,
+		Stage:          agent.PlannerStageContextResolved,
+		UserQuestion:   req.Question,
+		Tools:          s.availableFinalTools(),
+		WebEnabled:     s.canUseWebSearch(),
+		Context:        &contextResult.Context,
+		LongTermMemory: longTermContext,
 	}
 	decision, err := s.planner.Plan(ctx, input)
 	if err != nil {
@@ -338,7 +430,7 @@ func (s *AgentService) planWithConversationContext(ctx context.Context, req Agen
 }
 
 // planWithKnowledgeProbe 执行轻量探测并进行二次规划
-func (s *AgentService) planWithKnowledgeProbe(ctx context.Context, req ChatRequest, probeDecision agent.Decision, trace *agent.Trace) agent.Decision {
+func (s *AgentService) planWithKnowledgeProbe(ctx context.Context, req ChatRequest, probeDecision agent.Decision, longTermContext *agent.LongTermMemoryContext, trace *agent.Trace) agent.Decision {
 	query := strings.TrimSpace(probeDecision.SearchPlan.Query)
 	if query == "" {
 		query = req.Question
@@ -357,12 +449,13 @@ func (s *AgentService) planWithKnowledgeProbe(ctx context.Context, req ChatReque
 	trace.MarkProbeEvidence(evidence)
 	defaults := s.defaultSearchPlan(result.Query)
 	input := agent.PlannerInput{
-		Stage:         agent.PlannerStageProbeResolved,
-		UserQuestion:  req.Question,
-		Tools:         s.availableProbeResolvedTools(),
-		WebEnabled:    s.canUseWebSearch(),
-		ProbeResult:   &result,
-		ProbeEvidence: &evidence,
+		Stage:          agent.PlannerStageProbeResolved,
+		UserQuestion:   req.Question,
+		Tools:          s.availableProbeResolvedTools(),
+		WebEnabled:     s.canUseWebSearch(),
+		ProbeResult:    &result,
+		ProbeEvidence:  &evidence,
+		LongTermMemory: longTermContext,
 	}
 	decision, err := s.planner.Plan(ctx, input)
 	if err != nil {

@@ -83,6 +83,8 @@ func main() {
 	chunkRepo := repository.NewChunkRepository(db)
 	chatLogRepo := repository.NewChatLogRepository(db)
 	conversationRepo := repository.NewConversationRepository(db)
+	memoryRepo := repository.NewLongTermMemoryRepository(db)
+	memoryVectors := vectorstore.NewMemoryQdrantStore(cfg.Qdrant.URL, cfg.LongTermMemory.Collection)
 	vectorRetriever := rag.NewQdrantRetriever(documentRepo, chunkRepo, qdrant, embedder)
 	bm25Retriever := rag.NewBM25Retriever(documentRepo, chunkRepo, keywordStore)
 	ragRetriever := rag.NewHybridRetriever(vectorRetriever, bm25Retriever)
@@ -115,6 +117,8 @@ func main() {
 
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpiresHours)
 	kbService := service.NewKnowledgeBaseService(kbRepo)
+	memoryLifecycle := service.NewMemoryLifecycleService(memoryRepo, kbRepo, cfg.LongTermMemory)
+	kbService.ConfigureMemoryCleaner(memoryLifecycle)
 	documentService := service.NewDocumentService(documentRepo, kbRepo, taskProducer, minioClient)
 	sourceService := appsource.NewService(sourceRepo, kbRepo, documentRepo, minioClient, taskProducer, cfg.Source)
 	sourceConsumer := appsource.NewConsumer(rabbitClient, sourceRepo, sourceService, cfg.Rabbit, cfg.Source)
@@ -132,11 +136,18 @@ func main() {
 		logger.Logger.Fatal("初始化 RAG Chain 失败", zap.Error(err))
 	}
 	chatService.ConfigureShortTermMemory(conversationRepo, taskProducer)
+	chatService.ConfigureLongTermMemory(memoryRepo, cfg.LongTermMemory)
 	conversationCompactor := service.NewConversationCompactor(conversationRepo, chatLogRepo, chatModel, cfg.Memory)
 	conversationCompactConsumer := tasks.NewConversationCompactConsumer(rabbitClient, conversationRepo, conversationCompactor, cfg)
 	if err := conversationCompactConsumer.Start(ctx, cfg.Rabbit.ConversationCompactQueue); err != nil {
 		logger.Logger.Fatal("启动会话摘要消费者失败", zap.Error(err))
 	}
+	memoryConsolidator := service.NewMemoryConsolidator(memoryRepo, chatLogRepo, chatModel, cfg.LongTermMemory)
+	memoryConsumer := tasks.NewMemoryConsumer(rabbitClient, memoryRepo, memoryVectors, embedder, memoryConsolidator, cfg)
+	if err := memoryConsumer.Start(ctx); err != nil {
+		logger.Logger.Fatal("启动长期记忆消费者失败", zap.Error(err))
+	}
+	tasks.NewMemoryScheduler(memoryRepo, rabbitClient, cfg.LongTermMemory).Start(ctx)
 
 	authHandler := handler.NewAuthHandler(authService)
 	kbHandler := handler.NewKnowledgeBaseHandler(kbService)
@@ -147,7 +158,9 @@ func main() {
 	agentPlanner := agent.NewLLMPlanner(rewriteChatModel)
 	agentService := service.NewAgentService(chatService, agentPlanner, chatModel)
 	agentService.ConfigureShortTermMemory(conversationRepo, service.NewConversationContextAssembler(conversationRepo, chatLogRepo, cfg.Memory), cfg.Memory)
+	agentService.ConfigureLongTermMemory(service.NewLongTermMemoryRetriever(memoryRepo, memoryVectors, embedder, cfg.LongTermMemory), service.NewMemoryDirectiveProcessor(chatModel, cfg.LongTermMemory), cfg.LongTermMemory)
 	agentHandler := handler.NewAgentHandler(agentService)
+	memoryHandler := handler.NewMemoryHandler(memoryLifecycle)
 
 	r := router.New(router.Dependencies{
 		JWTSecret:       cfg.JWT.Secret,
@@ -158,6 +171,7 @@ func main() {
 		AgentHandler:    agentHandler,
 		SourceHandler:   sourceHandler,
 		OAuthHandler:    oauthHandler,
+		MemoryHandler:   memoryHandler,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

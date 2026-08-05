@@ -8,7 +8,17 @@ import (
 )
 
 type KnowledgeBaseService struct {
-	kbs *repository.KnowledgeBaseRepository
+	kbs    *repository.KnowledgeBaseRepository
+	memory knowledgeBaseMemoryCleaner
+}
+
+type knowledgeBaseMemoryCleaner interface {
+	DeleteKnowledgeBaseMemories(userID, knowledgeBaseID uint64) error
+}
+
+// ConfigureMemoryCleaner 配置知识库长期记忆清理器
+func (s *KnowledgeBaseService) ConfigureMemoryCleaner(cleaner knowledgeBaseMemoryCleaner) {
+	s.memory = cleaner
 }
 
 type CreateKnowledgeBaseInput struct {
@@ -45,6 +55,11 @@ func (s *KnowledgeBaseService) List(userID uint64) ([]model.KnowledgeBase, error
 
 // Delete 删除用户知识库
 func (s *KnowledgeBaseService) Delete(userID, id uint64) error {
+	if s.memory != nil {
+		if err := s.memory.DeleteKnowledgeBaseMemories(userID, id); err != nil {
+			return pkgerrors.WithMessage(err, "清理知识库长期记忆失败")
+		}
+	}
 	rows, err := s.kbs.DeleteByIDAndUserID(id, userID)
 	if err != nil {
 		return pkgerrors.WithMessage(err, "删除知识库失败")

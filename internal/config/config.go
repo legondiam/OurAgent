@@ -10,20 +10,21 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig      `yaml:"server" mapstructure:"server"`
-	MySQL  MySQLConfig       `yaml:"mysql" mapstructure:"mysql"`
-	Qdrant QdrantConfig      `yaml:"qdrant" mapstructure:"qdrant"`
-	MinIO  MinIOConfig       `yaml:"minio" mapstructure:"minio"`
-	LLM    LLMConfig         `yaml:"llm" mapstructure:"llm"`
-	RAG    RAGConfig         `yaml:"rag" mapstructure:"rag"`
-	Rerank RerankConfig      `yaml:"rerank" mapstructure:"rerank"`
-	JWT    JWTConfig         `yaml:"jwt" mapstructure:"jwt"`
-	Search SearchConfig      `yaml:"search" mapstructure:"search"`
-	Rabbit RabbitMQConfig    `yaml:"rabbitmq" mapstructure:"rabbitmq"`
-	Source SourceSyncConfig  `yaml:"source_sync" mapstructure:"source_sync"`
-	Web    WebSearchConfig   `yaml:"web_search" mapstructure:"web_search"`
-	OAuth  OAuthConfig       `yaml:"oauth" mapstructure:"oauth"`
-	Memory AgentMemoryConfig `yaml:"agent_memory" mapstructure:"agent_memory"`
+	Server         ServerConfig         `yaml:"server" mapstructure:"server"`
+	MySQL          MySQLConfig          `yaml:"mysql" mapstructure:"mysql"`
+	Qdrant         QdrantConfig         `yaml:"qdrant" mapstructure:"qdrant"`
+	MinIO          MinIOConfig          `yaml:"minio" mapstructure:"minio"`
+	LLM            LLMConfig            `yaml:"llm" mapstructure:"llm"`
+	RAG            RAGConfig            `yaml:"rag" mapstructure:"rag"`
+	Rerank         RerankConfig         `yaml:"rerank" mapstructure:"rerank"`
+	JWT            JWTConfig            `yaml:"jwt" mapstructure:"jwt"`
+	Search         SearchConfig         `yaml:"search" mapstructure:"search"`
+	Rabbit         RabbitMQConfig       `yaml:"rabbitmq" mapstructure:"rabbitmq"`
+	Source         SourceSyncConfig     `yaml:"source_sync" mapstructure:"source_sync"`
+	Web            WebSearchConfig      `yaml:"web_search" mapstructure:"web_search"`
+	OAuth          OAuthConfig          `yaml:"oauth" mapstructure:"oauth"`
+	Memory         AgentMemoryConfig    `yaml:"agent_memory" mapstructure:"agent_memory"`
+	LongTermMemory LongTermMemoryConfig `yaml:"long_term_memory" mapstructure:"long_term_memory"`
 }
 
 type ServerConfig struct {
@@ -101,6 +102,9 @@ type RabbitMQConfig struct {
 	DeleteQueue                string `yaml:"delete_queue" mapstructure:"delete_queue"`
 	SourceSyncQueue            string `yaml:"source_sync_queue" mapstructure:"source_sync_queue"`
 	ConversationCompactQueue   string `yaml:"conversation_compact_queue" mapstructure:"conversation_compact_queue"`
+	MemoryConsolidateQueue     string `yaml:"memory_consolidate_queue" mapstructure:"memory_consolidate_queue"`
+	MemoryIndexQueue           string `yaml:"memory_index_queue" mapstructure:"memory_index_queue"`
+	MemoryDeleteQueue          string `yaml:"memory_delete_queue" mapstructure:"memory_delete_queue"`
 	RetryDelaySeconds          int    `yaml:"retry_delay_seconds" mapstructure:"retry_delay_seconds"`
 	MaxRetries                 int    `yaml:"max_retries" mapstructure:"max_retries"`
 	IndexLeaseSeconds          int    `yaml:"index_lease_seconds" mapstructure:"index_lease_seconds"`
@@ -108,7 +112,40 @@ type RabbitMQConfig struct {
 	DeleteWorkers              int    `yaml:"delete_workers" mapstructure:"delete_workers"`
 	SourceSyncWorkers          int    `yaml:"source_sync_workers" mapstructure:"source_sync_workers"`
 	ConversationCompactWorkers int    `yaml:"conversation_compact_workers" mapstructure:"conversation_compact_workers"`
+	MemoryConsolidateWorkers   int    `yaml:"memory_consolidate_workers" mapstructure:"memory_consolidate_workers"`
+	MemoryIndexWorkers         int    `yaml:"memory_index_workers" mapstructure:"memory_index_workers"`
+	MemoryDeleteWorkers        int    `yaml:"memory_delete_workers" mapstructure:"memory_delete_workers"`
 	PrefetchCount              int    `yaml:"prefetch_count" mapstructure:"prefetch_count"`
+}
+
+type LongTermMemoryConfig struct {
+	Enabled                     bool    `yaml:"enabled" mapstructure:"enabled"`
+	Collection                  string  `yaml:"collection" mapstructure:"collection"`
+	DirectiveEnabled            bool    `yaml:"directive_enabled" mapstructure:"directive_enabled"`
+	ConsolidationEnabled        bool    `yaml:"consolidation_enabled" mapstructure:"consolidation_enabled"`
+	WorthinessGateEnabled       bool    `yaml:"worthiness_gate_enabled" mapstructure:"worthiness_gate_enabled"`
+	SemanticRecallEnabled       bool    `yaml:"semantic_recall_enabled" mapstructure:"semantic_recall_enabled"`
+	SemanticTopK                int     `yaml:"semantic_top_k" mapstructure:"semantic_top_k"`
+	FinalTopK                   int     `yaml:"final_top_k" mapstructure:"final_top_k"`
+	SimilarityThreshold         float64 `yaml:"similarity_threshold" mapstructure:"similarity_threshold"`
+	MaxContextTokens            int     `yaml:"max_context_tokens" mapstructure:"max_context_tokens"`
+	RetrievalTimeoutSeconds     int     `yaml:"retrieval_timeout_seconds" mapstructure:"retrieval_timeout_seconds"`
+	DirectiveTimeoutSeconds     int     `yaml:"directive_timeout_seconds" mapstructure:"directive_timeout_seconds"`
+	ConsolidationTimeoutSeconds int     `yaml:"consolidation_timeout_seconds" mapstructure:"consolidation_timeout_seconds"`
+	CandidateExpireHours        int     `yaml:"candidate_expire_hours" mapstructure:"candidate_expire_hours"`
+	PreferenceTTLHours          int     `yaml:"preference_ttl_hours" mapstructure:"preference_ttl_hours"`
+	RoleTTLHours                int     `yaml:"role_ttl_hours" mapstructure:"role_ttl_hours"`
+	TerminologyTTLHours         int     `yaml:"terminology_ttl_hours" mapstructure:"terminology_ttl_hours"`
+	BusinessObjectTTLHours      int     `yaml:"business_object_ttl_hours" mapstructure:"business_object_ttl_hours"`
+	ProjectContextTTLHours      int     `yaml:"project_context_ttl_hours" mapstructure:"project_context_ttl_hours"`
+	AutoPromoteMinConversations int     `yaml:"auto_promote_min_conversations" mapstructure:"auto_promote_min_conversations"`
+	ConsolidationIdleSeconds    int     `yaml:"consolidation_idle_seconds" mapstructure:"consolidation_idle_seconds"`
+	ConsolidationMaxSignals     int     `yaml:"consolidation_max_signals" mapstructure:"consolidation_max_signals"`
+	ConsolidationMaxInputTokens int     `yaml:"consolidation_max_input_tokens" mapstructure:"consolidation_max_input_tokens"`
+	MaxCandidatesPerBatch       int     `yaml:"max_candidates_per_batch" mapstructure:"max_candidates_per_batch"`
+	TaskLeaseSeconds            int     `yaml:"task_lease_seconds" mapstructure:"task_lease_seconds"`
+	SchedulerIntervalSeconds    int     `yaml:"scheduler_interval_seconds" mapstructure:"scheduler_interval_seconds"`
+	SchedulerBatchSize          int     `yaml:"scheduler_batch_size" mapstructure:"scheduler_batch_size"`
 }
 
 type AgentMemoryConfig struct {
@@ -214,6 +251,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.delete_queue", "ouragent.document.delete.cleanup")
 	v.SetDefault("rabbitmq.source_sync_queue", "ouragent.source.sync")
 	v.SetDefault("rabbitmq.conversation_compact_queue", "ouragent.conversation.compact")
+	v.SetDefault("rabbitmq.memory_consolidate_queue", "ouragent.memory.consolidate")
+	v.SetDefault("rabbitmq.memory_index_queue", "ouragent.memory.index")
+	v.SetDefault("rabbitmq.memory_delete_queue", "ouragent.memory.delete")
 	v.SetDefault("rabbitmq.retry_delay_seconds", 30)
 	v.SetDefault("rabbitmq.max_retries", 5)
 	v.SetDefault("rabbitmq.index_lease_seconds", 1800)
@@ -221,6 +261,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rabbitmq.delete_workers", 2)
 	v.SetDefault("rabbitmq.source_sync_workers", 1)
 	v.SetDefault("rabbitmq.conversation_compact_workers", 1)
+	v.SetDefault("rabbitmq.memory_consolidate_workers", 1)
+	v.SetDefault("rabbitmq.memory_index_workers", 1)
+	v.SetDefault("rabbitmq.memory_delete_workers", 1)
 	v.SetDefault("rabbitmq.prefetch_count", 1)
 	v.SetDefault("source_sync.scheduler_interval_seconds", 60)
 	v.SetDefault("source_sync.lease_seconds", 1800)
@@ -243,6 +286,33 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent_memory.compaction_lease_seconds", 180)
 	v.SetDefault("agent_memory.conversation_processing_lease_seconds", 180)
 	v.SetDefault("agent_memory.conversation_ttl_hours", 168)
+	v.SetDefault("long_term_memory.enabled", false)
+	v.SetDefault("long_term_memory.collection", "our_agent_memories")
+	v.SetDefault("long_term_memory.directive_enabled", true)
+	v.SetDefault("long_term_memory.consolidation_enabled", true)
+	v.SetDefault("long_term_memory.worthiness_gate_enabled", true)
+	v.SetDefault("long_term_memory.semantic_recall_enabled", true)
+	v.SetDefault("long_term_memory.semantic_top_k", 12)
+	v.SetDefault("long_term_memory.final_top_k", 6)
+	v.SetDefault("long_term_memory.similarity_threshold", 0.70)
+	v.SetDefault("long_term_memory.max_context_tokens", 1200)
+	v.SetDefault("long_term_memory.retrieval_timeout_seconds", 3)
+	v.SetDefault("long_term_memory.directive_timeout_seconds", 30)
+	v.SetDefault("long_term_memory.consolidation_timeout_seconds", 120)
+	v.SetDefault("long_term_memory.candidate_expire_hours", 720)
+	v.SetDefault("long_term_memory.preference_ttl_hours", 4320)
+	v.SetDefault("long_term_memory.role_ttl_hours", 4320)
+	v.SetDefault("long_term_memory.terminology_ttl_hours", 4320)
+	v.SetDefault("long_term_memory.business_object_ttl_hours", 2160)
+	v.SetDefault("long_term_memory.project_context_ttl_hours", 2160)
+	v.SetDefault("long_term_memory.auto_promote_min_conversations", 2)
+	v.SetDefault("long_term_memory.consolidation_idle_seconds", 300)
+	v.SetDefault("long_term_memory.consolidation_max_signals", 10)
+	v.SetDefault("long_term_memory.consolidation_max_input_tokens", 4000)
+	v.SetDefault("long_term_memory.max_candidates_per_batch", 5)
+	v.SetDefault("long_term_memory.task_lease_seconds", 180)
+	v.SetDefault("long_term_memory.scheduler_interval_seconds", 30)
+	v.SetDefault("long_term_memory.scheduler_batch_size", 100)
 	v.SetDefault("web_search.disclaimer", "当前知识库没有找到足够信息，以下内容基于联网搜索结果生成，仅供参考。网络资料可能不准确、过期或与实际情况不一致。")
 }
 

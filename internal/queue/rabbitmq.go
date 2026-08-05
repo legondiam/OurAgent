@@ -25,6 +25,15 @@ const (
 	ConversationCompactRoutingKey      = "conversation.compact"
 	ConversationCompactRetryRoutingKey = "conversation.compact.retry"
 	ConversationCompactDLQRoutingKey   = "conversation.compact.dlq"
+	MemoryConsolidateRoutingKey        = "memory.consolidate"
+	MemoryConsolidateRetryRoutingKey   = "memory.consolidate.retry"
+	MemoryConsolidateDLQRoutingKey     = "memory.consolidate.dlq"
+	MemoryIndexRoutingKey              = "memory.index"
+	MemoryIndexRetryRoutingKey         = "memory.index.retry"
+	MemoryIndexDLQRoutingKey           = "memory.index.dlq"
+	MemoryDeleteRoutingKey             = "memory.delete"
+	MemoryDeleteRetryRoutingKey        = "memory.delete.retry"
+	MemoryDeleteDLQRoutingKey          = "memory.delete.dlq"
 	contentTypeJSON                    = "application/json"
 )
 
@@ -160,6 +169,9 @@ func (c *Client) declareTopology(cfg config.RabbitMQConfig) error {
 	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.ConversationCompactQueue, ConversationCompactRoutingKey, ConversationCompactRetryRoutingKey, ConversationCompactDLQRoutingKey, cfg.RetryDelaySeconds); err != nil {
 		return err
 	}
+	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.MemoryConsolidateQueue, MemoryConsolidateRoutingKey, MemoryConsolidateRetryRoutingKey, MemoryConsolidateDLQRoutingKey, cfg.RetryDelaySeconds); err != nil { return err }
+	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.MemoryIndexQueue, MemoryIndexRoutingKey, MemoryIndexRetryRoutingKey, MemoryIndexDLQRoutingKey, cfg.RetryDelaySeconds); err != nil { return err }
+	if err := c.declareTaskQueues(ch, cfg.Exchange, cfg.MemoryDeleteQueue, MemoryDeleteRoutingKey, MemoryDeleteRetryRoutingKey, MemoryDeleteDLQRoutingKey, cfg.RetryDelaySeconds); err != nil { return err }
 	return nil
 }
 

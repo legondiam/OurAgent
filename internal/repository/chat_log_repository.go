@@ -61,6 +61,20 @@ func (r *ChatLogRepository) Create(log *model.ChatLog) error {
 	return nil
 }
 
+// CreateWithMemorySignal 原子保存问答日志和长期记忆Signal
+func (r *ChatLogRepository) CreateWithMemorySignal(log *model.ChatLog, signal *model.MemoryConsolidationSignal) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(log).Error; err != nil {
+			return pkgerrors.WithMessage(err, "保存问答日志失败")
+		}
+		if signal == nil {
+			return nil
+		}
+		signal.ChatLogID = log.ID
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(signal).Error
+	})
+}
+
 // ListByUserID 查询用户问答日志列表
 func (r *ChatLogRepository) ListByUserID(userID uint64, limit int) ([]model.ChatLog, error) {
 	var logs []model.ChatLog

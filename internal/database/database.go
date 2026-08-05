@@ -25,5 +25,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Conversation{},
 		&model.ChatLog{},
 		&model.ChatFeedback{},
+		&model.LongTermMemory{},
+		&model.LongTermMemoryVersion{},
+		&model.LongTermMemoryEvidence{},
+		&model.LongTermMemoryJob{},
+		&model.LongTermMemoryForgetTombstone{},
+		&model.MemoryConsolidationSignal{},
 	)
 }

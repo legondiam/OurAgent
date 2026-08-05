@@ -45,6 +45,32 @@ type Trace struct {
 	ProbeEvidence   *ProbeEvidence `json:"probe_evidence,omitempty"`
 	PostRAGDecision *Decision      `json:"post_rag_decision,omitempty"`
 	PlannerError    string         `json:"planner_error,omitempty"`
+	Memory          *MemoryTrace   `json:"memory,omitempty"`
+}
+
+type MemoryTrace struct {
+	Enabled                   bool     `json:"memory_enabled"`
+	FixedMemoryCount          int      `json:"fixed_memory_count"`
+	LexicalMemoryCount        int      `json:"lexical_memory_count"`
+	SemanticMemoryCount       int      `json:"semantic_memory_count"`
+	SelectedMemoryIDs         []uint64 `json:"selected_memory_ids,omitempty"`
+	SelectedMemoryTypes       []string `json:"selected_memory_types,omitempty"`
+	EstimatedTokens           int      `json:"estimated_tokens"`
+	SemanticRecallTriggered   bool     `json:"semantic_recall_triggered"`
+	RecallGateReason          string   `json:"recall_gate_reason,omitempty"`
+	SemanticRetrievalDegraded bool     `json:"semantic_retrieval_degraded"`
+	DirectiveDetected         bool     `json:"directive_detected"`
+	WorthinessSignal          string   `json:"worthiness_signal,omitempty"`
+}
+
+// MarkLongTermMemory 记录长期记忆召回元数据
+func (t *Trace) MarkLongTermMemory(context LongTermMemoryContext) {
+	trace := &MemoryTrace{Enabled: true, FixedMemoryCount: context.FixedCount, LexicalMemoryCount: context.LexicalCount, SemanticMemoryCount: context.SemanticCount, EstimatedTokens: context.EstimatedTokens, SemanticRecallTriggered: context.SemanticRecallTriggered, RecallGateReason: context.RecallGateReason, SemanticRetrievalDegraded: context.SemanticRetrievalDegraded}
+	for _, item := range context.Items {
+		trace.SelectedMemoryIDs = append(trace.SelectedMemoryIDs, item.MemoryID)
+		trace.SelectedMemoryTypes = append(trace.SelectedMemoryTypes, item.Type)
+	}
+	t.Memory = trace
 }
 
 // MarkContextAssembled记录内部短期上下文装配结果

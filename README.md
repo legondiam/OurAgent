@@ -1,6 +1,6 @@
 # OurAgent
 
-OurAgent是一个面向企业知识库场景的Go后端服务，提供文档接入、异步索引、混合检索、重排序、可追踪回答、流式问答、Agentic RAG和外部知识源同步能力。
+OurAgent是一个面向企业知识库场景的Go后端服务，提供文档接入、异步索引、混合检索、重排序、可追踪回答、流式问答、Agentic RAG、Agent记忆和外部知识源同步能力。
 
 项目不是简单的文件上传问答Demo，而是围绕实际RAG链路构建：文档会被解析为结构化chunk，同时写入向量索引和关键词索引；问答时支持query rewrite、多路召回、RRF融合、重排序、上下文构建、来源引用和检索trace，便于排查回答依据。
 
@@ -17,7 +17,8 @@ OurAgent是一个面向企业知识库场景的Go后端服务，提供文档接�
 - DashScope兼容重排序
 - 严格RAG回答、来源引用和检索trace
 - 普通问答和SSE流式问答接口
-- Agentic RAG问答接口，支持LLM Router、直接回答、会话上下文工具、知识库轻量探测、检索规划、澄清、拒答和联网补充
+- Agentic RAG问答接口，支持LLM Router、内部上下文装配、直接回答、知识库轻量探测、检索规划、澄清、拒答和联网补充
+- Agent短期与长期记忆，支持异步会话压缩、稳定用户背景沉淀、跨会话指代解析和按需语义召回
 - 问答日志和反馈接口
 - 知识库无答案时的联网搜索降级
 - RabbitMQ异步文档索引和删除清理任务
@@ -77,12 +78,18 @@ Gin API
         |
         +-- Agent Router Planner
         +-- DirectAnswerTool
-        +-- ConversationContextTool
+        +-- ConversationContextAssembler
+        +-- LongTermMemoryRetriever
+        +-- MemoryDirectiveProcessor
         +-- KnowledgeProbeTool
         +-- KnowledgeSearchTool
         +-- Post-RAG Planner
         +-- WebSearchTool
         +-- Agent trace
+        |
+        +-- MySQL memory state and content
+        +-- Qdrant rebuildable memory index
+        +-- RabbitMQ memory consolidation lifecycle
 ```
 
 ## 项目结构
@@ -194,6 +201,11 @@ go run ./cmd/server
 | `POST` | `/knowledge-bases/:id/agent/chat` | Agentic RAG问答 |
 | `GET` | `/chat-logs` | 查询问答日志 |
 | `POST` | `/chat-logs/:id/feedback` | 提交问答反馈 |
+| `GET` | `/memories` | 查询长期记忆 |
+| `POST` | `/memories/:id/confirm` | 确认候选记忆 |
+| `PATCH` | `/memories/:id` | 修改长期记忆 |
+| `DELETE` | `/memories/:id` | 两阶段删除单条长期记忆 |
+| `DELETE` | `/memories?scope=...&confirm=true` | 按作用域批量删除长期记忆 |
 | `POST` | `/knowledge-bases/:id/sources` | 创建外部知识源 |
 | `GET` | `/knowledge-bases/:id/sources` | 查询外部知识源 |
 | `POST` | `/knowledge-sources/:id/sync` | 触发知识源同步 |
@@ -225,6 +237,8 @@ question
 ```text
 question
   -> optional ConversationContextAssembler
+  -> fixed / lexical / optional semantic long-term memory recall
+  -> AgentRuntimeContext assembly
   -> Pre-RAG / Context-Resolved LLM Planner
   -> conversation_answer / direct_answer / knowledge_probe / clarify / knowledge_search / web_search / reject
   -> optional ConversationAnswerTool
@@ -254,6 +268,58 @@ Agent Router基于Eino ChatModel实现LLM Planner，并使用原生function call
 ```
 
 当请求携带`conversation_id`时，服务端会按`user_id`、`knowledge_base_id`和`conversation_id`校验归属。会话在最后一次成功问答7天后过期；同一会话同一时间只允许一个活跃请求，其他请求返回409，不同会话仍可并行处理。新会话记录和首轮`chat_log`在同一事务中创建，旧版本中只有`chat_logs`而没有`conversations`记录的会话不会回填。
+
+## Agent记忆设计
+
+记忆是OurAgent的核心基础设施之一。它的目的不是替代知识库，也不是让模型保存所有聊天内容，而是让Agent在多轮和跨会话业务交流中持续理解用户：用户负责什么、正在跟进哪个项目、某个个人术语指向什么对象，以及用户长期偏好的回答方式。
+
+记忆由服务端自动装配，不作为Eino Tool暴露给Planner。这样可以保证每轮规划获得一致上下文，同时避免模型自行决定是否读取关键历史或直接修改记忆状态。
+
+| 层级 | 保存内容 | 生命周期 | 主要用途 |
+| --- | --- | --- | --- |
+| 短期记忆 | 当前会话摘要和最近原始问答 | 随会话过期 | 处理追问、省略和当前话题连续性 |
+| 长期记忆 | 稳定的用户角色、项目背景、持续业务对象、个人术语和明确偏好 | 跨会话，按类型过期 | 解析跨会话指代、补全检索对象和调整回答方式 |
+| 企业知识库 | 制度、产品能力、价格、权限、API参数和版本事实 | 由文档同步决定 | 为企业事实回答提供当前证据和来源 |
+
+### 短期记忆
+
+短期记忆由内部`ConversationContextAssembler`负责。短会话直接使用原始问答；历史超过Token阈值后，RabbitMQ异步压缩旧内容并保留最近原始问答。请求不会为了生成摘要额外同步调用一次LLM，摘要尚未完成或执行失败时，系统按硬Token预算优先保留最新消息，核心问答链路仍可继续。
+
+### 长期记忆写入
+
+普通Agent问答不会逐条调用LLM提取记忆。每轮保存前先由无模型`MemoryWorthinessGate`识别明显的角色、项目、持续业务对象、个人术语或纠正表达；只有命中的消息才在`chat_log`事务中创建轻量Signal。后台按同一用户、知识库和会话聚合，在空闲5分钟、累计10条Signal或达到4000估算Token时批量调用一次ChatModel，单批最多生成5个候选。
+
+普通批量提取只产生当前知识库下的`role`、`business_object`、`project_context`、`terminology`和`instruction`候选。前四类需要至少两个不同会话提供一致证据才能自动升级为`active`，`instruction`不会自动升级。`preference`不参与普通提取，只能由用户明确要求记住并保存为`user_global`。用户明确说“记住、纠正、忘掉”时，由内部`MemoryDirectiveProcessor`同步解析，并把聊天记录与记忆操作放在同一个MySQL事务中提交。当前会话中的用户决策只保留在短期上下文；正式决策、审批结果和执行状态应由知识库或业务系统提供，不作为长期记忆类型。
+
+```text
+Agent turn committed
+  -> local MemoryWorthinessGate
+  -> candidate Signal
+  -> idle / count / Token batch trigger
+  -> ChatModel extracts attributable candidates
+  -> MySQL candidate and evidence
+  -> cross-conversation confirmation or explicit confirmation
+  -> active memory
+  -> asynchronous Qdrant indexing
+```
+
+### 长期记忆召回
+
+长期记忆采用三路召回：少量明确确认的全局偏好固定加载；当前问题命中个人术语时执行MySQL词面匹配；只有`MemoryRecallGate`发现“上次、之前、这个项目、我负责的”等跨会话信号时，才调用Embedding和独立Qdrant Collection进行语义召回。向量结果必须回查MySQL，并再次校验用户、当前知识库、状态和有效期，`candidate`、`conflicted`、`expired`和`deleting`都不会进入Planner。
+
+短期上下文和长期记忆可并行读取，最终统一注入`AgentRuntimeContext`。长期记忆正文被标记为不可信用户上下文，只能帮助理解背景、指代和检索范围，不能修改工具权限、安全规则或系统指令。`AgentTrace`只记录命中的Memory ID、类型、数量、Token估算和降级状态，不记录记忆正文。
+
+### 存储与事实边界
+
+长期记忆采用“MySQL存权威状态，Qdrant存可重建检索索引”的设计：
+
+- MySQL保存记忆正文、当前状态、版本、证据、有效期、异步任务和遗忘Tombstone
+- Qdrant只保存向量以及`memory_id`、用户、知识库、作用域、类型、状态和版本等过滤字段
+- 召回最终以MySQL为准，Qdrant丢失时可以重建，Qdrant不可用时核心问答仍可降级运行
+- 产品能力、套餐限制、价格、制度条款、权限规则、API参数和版本能力属于企业事实类型，禁止写入长期记忆，即使用户明确要求“记住”也不会保存
+- 长期记忆可以表述为“用户之前提到的背景”，但确认当前客观状态时仍必须查询知识库或要求用户确认
+
+删除采用两阶段流程：MySQL先把记忆改为`deleting`并立即停止召回，同时取消相关Signal和旧任务、写入哈希Tombstone并创建删除任务；Qdrant向量删除成功后，再彻底清理Memory、Version和Evidence中的派生正文。删除长期记忆不会删除原始`chat_logs`。
 
 ## 配置说明
 
@@ -312,6 +378,17 @@ agent_memory:
 ```
 
 `short_term_enabled=false`时临时回退到旧`context_lookup`链路。摘要任务复用当前ChatModel和RabbitMQ延迟重试拓扑，任务失败不会阻断主问答。
+
+长期记忆V1默认关闭，可通过`long_term_memory.enabled=true`灰度开启。开启后，普通对话只在本地Worthiness Gate命中时写入轻量Signal，由后台按同一用户、知识库和会话批量提取候选；显式“记住、纠正、忘掉”由Agent内部组件处理，不会注册为Planner工具。MySQL保存权威状态和正文，独立Qdrant Collection只保存可重建向量及过滤字段。
+
+管理接口：
+
+- `GET /api/v1/memories`
+- `POST /api/v1/memories/:id/confirm`
+- `PATCH /api/v1/memories/:id`
+- `DELETE /api/v1/memories/:id`
+
+删除接口返回HTTP 202和`deletion_pending`，记忆会立即停止召回，后台删除向量后再清理派生正文；原始聊天记录不会随长期记忆删除。
 
 远端文档第一次在完整列表中缺失时会进入`missing`状态并异步删除Qdrant、Bluge和父子切片，使其不能继续被RAG检索，同时保留MinIO原文和Document记录。连续两次完整同步缺失后才执行物理删除；如果文档重新出现，则重新拉取并恢复索引。
 

@@ -32,6 +32,15 @@ type ChatService struct {
 	cfg                 *config.Config
 	conversations       *repository.ConversationRepository
 	compactionPublisher ConversationCompactionPublisher
+	longTermCfg         config.LongTermMemoryConfig
+	worthinessGate      MemoryWorthinessGate
+	longTermRepo        *repository.LongTermMemoryRepository
+}
+
+// ConfigureLongTermMemory 配置Agent长期记忆持久化
+func (s *ChatService) ConfigureLongTermMemory(repo *repository.LongTermMemoryRepository, cfg config.LongTermMemoryConfig) {
+	s.longTermRepo = repo
+	s.longTermCfg = cfg
 }
 
 type ConversationCompactionPublisher interface {
@@ -43,9 +52,12 @@ type ChatRequest struct {
 	KnowledgeBaseID             uint64
 	ConversationID              string
 	Question                    string
+	OriginalQuestion            string
 	WebSearch                   bool
 	ConversationProcessingToken string
 	NewConversation             bool
+	PendingMemoryOperation      *model.PendingMemoryOperation
+	AgentTurn                   bool
 }
 
 type KnowledgeSearchOptions struct {
@@ -470,6 +482,7 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		ConversationProcessingToken: req.ConversationProcessingToken,
 		NewConversation:             req.NewConversation,
 		Question:                    req.Question,
+		OriginalQuestion:            originalChatQuestion(req),
 		TopK:                        topK,
 		ScoreThreshold:              scoreThreshold,
 		MaxContextTokens:            maxContextTokens,
@@ -485,7 +498,16 @@ func (s *ChatService) resolveRequest(req ChatRequest) (rag.Request, error) {
 		RerankCandidateLimit:        rerankCandidateLimit,
 		RerankTopN:                  rerankTopN,
 		WebSearch:                   req.WebSearch,
+		PendingMemoryOperation:      req.PendingMemoryOperation,
+		AgentTurn:                   req.AgentTurn,
 	}, nil
+}
+
+func originalChatQuestion(req ChatRequest) string {
+	if strings.TrimSpace(req.OriginalQuestion) != "" {
+		return req.OriginalQuestion
+	}
+	return req.Question
 }
 
 func applyKnowledgeSearchOptions(req *rag.Request, opts KnowledgeSearchOptions) {
@@ -525,7 +547,7 @@ func (s *ChatService) saveLogWithAgent(prepared *rag.PreparedChat, start time.Ti
 		KnowledgeBaseID:    prepared.Request.KnowledgeBaseID,
 		UserID:             prepared.Request.UserID,
 		ConversationID:     prepared.Request.ConversationID,
-		Question:           prepared.Request.Question,
+		Question:           persistedQuestion(prepared.Request),
 		Answer:             prepared.Answer,
 		RetrievedChunks:    datatypes.JSON(rawSources),
 		RetrievalTrace:     datatypes.JSON(rawTrace),
@@ -557,9 +579,32 @@ func (s *ChatService) saveLogWithAgent(prepared *rag.PreparedChat, start time.Ti
 	return log.ID, nil
 }
 
+func persistedQuestion(req rag.Request) string {
+	if strings.TrimSpace(req.OriginalQuestion) != "" {
+		return req.OriginalQuestion
+	}
+	return req.Question
+}
+
 func (s *ChatService) saveTurn(req rag.Request, log *model.ChatLog) error {
+	var signal *model.MemoryConsolidationSignal
+	if req.AgentTurn && s.longTermCfg.Enabled && s.longTermCfg.ConsolidationEnabled && s.longTermCfg.WorthinessGateEnabled && s.worthinessGate.Evaluate(log.Question) == MemoryWorthinessCandidate && log.AnswerMode != agent.FinalModeRejected {
+		idle := s.longTermCfg.ConsolidationIdleSeconds
+		if idle <= 0 {
+			idle = 300
+		}
+		signal = &model.MemoryConsolidationSignal{UserID: log.UserID, KnowledgeBaseID: log.KnowledgeBaseID, ConversationID: log.ConversationID, SignalType: "candidate", SignalSource: "worthiness_gate", EstimatedTokens: document.EstimateTokens(log.Question), Status: model.MemorySignalPending, EligibleAt: log.CreatedAt.Add(time.Duration(idle) * time.Second), CreatedAt: log.CreatedAt, UpdatedAt: log.CreatedAt}
+	}
+	if req.PendingMemoryOperation != nil && s.longTermRepo != nil {
+		expiresAt := log.CreatedAt.Add(time.Duration(s.cfg.Memory.ConversationTTLHours) * time.Hour)
+		var conversation *model.Conversation
+		if req.NewConversation {
+			conversation = &model.Conversation{ID: req.ConversationID, UserID: req.UserID, KnowledgeBaseID: req.KnowledgeBaseID, Status: model.ConversationStatusActive, SummarySchemaVersion: 1, SummaryStatus: model.ConversationSummaryStatusIdle, UnsummarizedTokens: log.ConversationTokens, LastMessageAt: log.CreatedAt, ExpiresAt: expiresAt}
+		}
+		return s.longTermRepo.SaveTurnWithExplicitMemory(conversation, log, req.ConversationProcessingToken, expiresAt, *req.PendingMemoryOperation, s.longTermCfg)
+	}
 	if s.conversations == nil || !s.cfg.Memory.ShortTermEnabled || (req.ConversationProcessingToken == "" && !req.NewConversation) {
-		return s.logs.Create(log)
+		return s.logs.CreateWithMemorySignal(log, signal)
 	}
 	expiresAt := log.CreatedAt.Add(time.Duration(s.cfg.Memory.ConversationTTLHours) * time.Hour)
 	if req.NewConversation {
@@ -574,9 +619,9 @@ func (s *ChatService) saveTurn(req rag.Request, log *model.ChatLog) error {
 			LastMessageAt:        log.CreatedAt,
 			ExpiresAt:            expiresAt,
 		}
-		return s.conversations.CreateWithFirstLog(conversation, log)
+		return s.conversations.CreateWithFirstLogAndSignal(conversation, log, signal)
 	}
-	return s.conversations.AppendLogAndRefresh(log, req.ConversationProcessingToken, expiresAt)
+	return s.conversations.AppendLogRefreshAndSignal(log, req.ConversationProcessingToken, expiresAt, signal)
 }
 
 func (s *ChatService) maybeQueueCompaction(ctx context.Context, log model.ChatLog) {

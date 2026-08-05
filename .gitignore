@@ -19,3 +19,4 @@ internal/eval/
 !docs/
 docs/*
 !docs/short-term-memory-implementation.md
+!docs/long-term-memory-implementation.md
